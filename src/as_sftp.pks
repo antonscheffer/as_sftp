@@ -1,0 +1,41 @@
+create or replace package as_sftp
+is
+  type tp_dir_line is record
+         ( file_name varchar2(32767)
+         , long_name varchar2(32767)
+         , is_directory boolean
+         , file_size number
+         , uid number
+         , gid number
+         , perm number
+         , atime date
+         , mtime date
+         );
+  type tp_dir_listing is table of tp_dir_line index by pls_integer;
+  --
+  procedure open_connection( i_host varchar2, i_port pls_integer := 22 );
+  procedure open_connection( i_host varchar2, i_trust_server boolean, i_port pls_integer := 22 );
+  procedure open_connection( i_host varchar2, i_fingerprint varchar2, i_port pls_integer := 22 );
+
+  procedure login( i_user varchar2, i_password varchar2 );
+
+  function pwd
+  return varchar2;
+
+  function read_dir( i_path varchar2 )
+  return tp_dir_listing;
+
+  function get_file( i_path varchar2, i_file in out nocopy blob )
+  return boolean;
+
+  procedure get_file( i_path varchar2, i_file in out nocopy blob );
+
+  function put_file( i_path varchar2, i_file blob )
+  return boolean;
+
+  procedure put_file( i_path varchar2, i_file blob );
+
+  procedure close_connection;
+
+  procedure set_log_level( i_level pls_integer );
+end;
