@@ -2,8 +2,8 @@
 A plsql SFTP client package
 
 Requirements:  
-grant execute on utl_tcp to <user>  
-grant execute on dbms_crypto to <user>  
+grant execute on utl_tcp to &lt;user&gt;  
+grant execute on dbms_crypto to &lt;user&gt;  
   
 ACL to reach the SFTP-server  
 Depending on your database version  
