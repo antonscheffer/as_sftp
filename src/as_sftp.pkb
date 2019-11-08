@@ -309,7 +309,6 @@ is
     end loop;
     for i in yc .. xc - 1
     loop
-      exit when c = 0;
       t := x(i) + c;
       if t >= cm
       then
