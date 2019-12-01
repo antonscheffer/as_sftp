@@ -33,7 +33,7 @@ end;</code></pre>
   dbms_network_acl_admin.add_privilege  
     ( acl         => 'as_sftp.xml'  
     , principal    => 'HR'  -- use your Oracle user  
-    , is_grant    => false  
+    , is_grant    => true  
     , privilege   => 'connect'  
     );  
   dbms_network_acl_admin.assign_acl  
