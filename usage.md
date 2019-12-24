@@ -1,8 +1,8 @@
 Some example usages of this package.
-First of a make sure that you have the required ACL.
+First of all make sure that you have the required ACL.
 
-This package keeps track of the "fingerprint" of a SFTP-server in the table s_sftp_known_hosts.
-This fingerprint is stored when you use the procedure open_connection with the right parameters.
+This package keeps track of the "fingerprint" of a SFTP-server in the table as_sftp_known_hosts.
+This fingerprint is stored when you use the procedure open_connection with the "right" parameters.
 
 Either, when you know the fingerprint
 <pre><code>begin
