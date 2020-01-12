@@ -1148,8 +1148,7 @@ is
     l_tmp raw(256);
     l_block_size pls_integer;
   begin
-    -- only handle none, aes and 3des. And no ctr from client
-    if g_encr_algo_s in ( 'aes128-cbc', 'aes192-cbc', 'aes256-cbc', 'rijndael256-cbc', 'rijndael-cbc@lysator.liu.se' )
+    if g_encr_algo_s in ( 'aes128-cbc', 'aes128-ctr', 'aes192-cbc', 'aes192-ctr', 'aes256-cbc', 'aes256-ctr', 'rijndael256-cbc', 'rijndael-cbc@lysator.liu.se' )
     then
       l_block_size := 16;
     else
@@ -1708,10 +1707,10 @@ is
     add2name_list( my_encr_algo_client_to_server, 'aes256-cbc' );
     add2name_list( my_encr_algo_client_to_server, 'aes192-cbc' );
     my_encr_algo_server_to_client := tp_name_list( 'aes128-cbc', 'aes128-ctr', '3des-cbc' );
-    add2name_list( my_encr_algo_client_to_server, 'aes256-cbc' );
-    add2name_list( my_encr_algo_client_to_server, 'aes256-ctr' );
-    add2name_list( my_encr_algo_client_to_server, 'aes192-cbc' );
-    add2name_list( my_encr_algo_client_to_server, 'aes192-ctr' );
+    add2name_list( my_encr_algo_server_to_client, 'aes256-cbc' );
+    add2name_list( my_encr_algo_server_to_client, 'aes256-ctr' );
+    add2name_list( my_encr_algo_server_to_client, 'aes192-cbc' );
+    add2name_list( my_encr_algo_server_to_client, 'aes192-ctr' );
     my_mac_algo_client_to_server := tp_name_list( 'hmac-sha1', 'hmac-md5' );
     add2name_list( my_mac_algo_client_to_server, 'hmac-sha2-256' );
     add2name_list( my_mac_algo_client_to_server, 'hmac-sha2-512' );
