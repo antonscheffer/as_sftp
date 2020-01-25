@@ -1961,7 +1961,7 @@ is
         end if;
         -- validate if l_qs is point on curve
         l_pb  := multiply_point( l_pa, l_xxx, l_curve );
-        l_K := lpad( demag( l_pb.x ), 2 * l_nlen, '0' );
+        l_K := demag( l_pb.x );
         l_tmp := null;
         append_string( l_tmp, V_C );
         append_string( l_tmp, V_S );
