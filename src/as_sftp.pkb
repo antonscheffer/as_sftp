@@ -36,6 +36,15 @@ is
   g_mac_algo_s   varchar2(100 char);
   g_compr_algo_c varchar2(100 char);
   g_compr_algo_s varchar2(100 char);
+  type tp_my_globals is record
+         ( excluded_kex_algos   varchar2(32767)
+         , preferred_kex_algos  varchar2(32767)
+         , excluded_encr_algos  varchar2(32767)
+         , preferred_encr_algos varchar2(32767)
+         , excluded_pkey_algos   varchar2(32767)
+         , preferred_pkey_algos  varchar2(32767)
+         );
+  my_globals tp_my_globals;
   --
   -- big integers
   ccc number := 16; -- number of nibbles
@@ -54,7 +63,7 @@ is
   g_iv_cypher_s2c_ctr number;
   --
   -- kex globals
-  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.02', 'US7ASCII' );
+  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.03', 'US7ASCII' );
   V_S raw(512);
   g_session_id raw(100);
   --
@@ -1446,6 +1455,7 @@ is
     l_dummy pls_integer;
   begin
     close_connection;
+    info_msg( 'try to connect to ' || p_host || ', port ' || p_port );
     g_con := utl_tcp.open_connection( remote_host => p_host, remote_port => p_port, in_buffer_size => 32767, tx_timeout => 5 );
     loop
       l_tmp := utl_tcp.get_raw( c => g_con, len => 4, peek => true );
@@ -1491,6 +1501,48 @@ is
       l_str := l_str || ',' || p_nl( i );
     end loop;
     info_msg( ltrim( l_str, ',' ) );
+  end;
+  --
+  procedure change_nl( p_list in out tp_name_list, p_sort varchar2, p_excl varchar2 )
+  is
+    l_tmp  tp_name_list;
+    l_sort tp_name_list;   
+    l_excl tp_name_list;  
+    procedure str2name_list( p_str varchar2, p_list out tp_name_list )
+    is
+      l_idx pls_integer;
+      l_str varchar2(32767) := p_str;
+    begin
+      p_list := tp_name_list();
+      loop
+        exit when l_str is null;
+        l_idx := instr( l_str || ',', ',' );
+        p_list.extend;
+        p_list( p_list.count ) := substr( l_str, 1, l_idx - 1 );
+        l_str := substr( l_str, l_idx + 1 );
+      end loop;
+    end;
+  begin
+    l_tmp := tp_name_list();
+    str2name_list( p_sort, l_sort );
+    str2name_list( p_excl, l_excl );
+    for i in 1 .. l_sort.count
+    loop
+      if l_sort(i) member of p_list and l_sort(i) not member of l_excl
+      then
+        l_tmp.extend;
+        l_tmp( l_tmp.count ) := l_sort(i); 
+      end if;  
+    end loop;  
+    for i in 1 .. p_list.count
+    loop
+      if p_list(i) not member of l_tmp and p_list(i) not member of l_excl
+      then
+        l_tmp.extend;
+        l_tmp( l_tmp.count ) := p_list(i); 
+      end if;  
+    end loop;
+    p_list := l_tmp;  
   end;
   --
   procedure handle_kex( p_buf raw, p_fingerprint varchar2 := null, p_trust boolean := null )
@@ -1718,6 +1770,11 @@ is
     my_compr_algo_client_to_server := tp_name_list( 'none' );
     my_compr_algo_server_to_client := tp_name_list( 'none' );
     --
+    change_nl( my_kex_algorithms            , my_globals.preferred_kex_algos, my_globals.excluded_kex_algos );
+    change_nl( my_encr_algo_client_to_server, my_globals.preferred_encr_algos, my_globals.excluded_encr_algos );
+    change_nl( my_encr_algo_server_to_client, my_globals.preferred_encr_algos, my_globals.excluded_encr_algos );
+    change_nl( my_public_key_algorithms     , my_globals.preferred_pkey_algos, my_globals.excluded_pkey_algos );
+    --
     I_C := utl_raw.concat( SSH_MSG_KEXINIT
                          , dbms_crypto.randombytes( 16 )
                          );
@@ -1760,6 +1817,7 @@ is
     then
       raise_application_error( -20003, 'Could not find matching encryption algorithm server to client' );
     end if;
+    info_msg( 'using ' || l_encr_algo_c || ', ' || l_encr_algo_s );
     --
     for i in my_mac_algo_client_to_server.first .. my_mac_algo_client_to_server.last
     loop
@@ -1786,6 +1844,7 @@ is
     then
       raise_application_error( -20005, 'Could not find matching mac algorithm server to client' );
     end if;
+    info_msg( 'using ' || l_mac_algo_c || ', ' || l_mac_algo_s );
     --
     for i in my_compr_algo_client_to_server.first .. my_compr_algo_client_to_server.last
     loop
@@ -1834,6 +1893,7 @@ is
         exit;
       end if;
     end loop;
+    info_msg( 'using ' || l_kex_algorithm );
   --
     if l_kex_algorithm = 'diffie-hellman-group1-sha1'
     then
@@ -1976,7 +2036,6 @@ is
     else
       raise_application_error( -20009, 'Could not find matching kex algorithm' );
     end if;
-    info_msg( 'using ' || l_kex_algorithm );
   --
     if l_kex_algorithm not in ( 'ecdh-sha2-nistp256', 'ecdh-sha2-nistp384', 'ecdh-sha2-nistp521' )
     then
@@ -2136,7 +2195,7 @@ is
                                );
   end;
   --
-  function do_auth( p_user varchar2, p_pw varchar2 )
+  function do_auth( p_user varchar2, p_pw varchar2, p_priv_key varchar2 := null, p_passphrase varchar2 := null )
   return boolean
   is
     l_rv boolean;
@@ -2144,11 +2203,272 @@ is
     l_idx pls_integer;
     l_buf raw(32767);
     l_buf2 raw(32767);
-    l_buf3 raw(32767);
     auth_methods tp_name_list;
-    l_modulus  raw(2000);
-    l_pub_exp  raw(2000);
-    l_priv_exp raw(2000);
+    c_INTEGER raw(1) := '02';
+    c_SEQUENCE raw(1) := '30';
+    --
+    function write_pk( p_algo varchar2, p_blob raw, p_signature raw )
+    return boolean
+    is
+      l_rv boolean := false;
+      l_buf4 raw(32767);
+    begin
+      l_pk_OK := false;
+      l_buf := SSH_MSG_USERAUTH_REQUEST;
+      append_string( l_buf, utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) );
+      append_string( l_buf, utl_i18n.string_to_raw( 'ssh-connection', 'US7ASCII' ) );
+      append_string( l_buf, utl_i18n.string_to_raw( 'publickey', 'US7ASCII' ) );
+      append_boolean( l_buf, p_signature is not null );
+      append_string( l_buf, utl_i18n.string_to_raw( p_algo, 'US7ASCII' ) );
+      append_string( l_buf, p_blob );
+      if p_signature is not null
+      then
+        append_string( l_buf, p_signature );
+      end if;
+      write_packet( l_buf );
+      info_msg( 'try ' || p_algo || ' public key' );
+      read_until( l_buf4, SSH_MSG_USERAUTH_SUCCESS, SSH_MSG_USERAUTH_FAILURE, SSH_MSG_USERAUTH_PK_OK );
+      case utl_raw.substr( l_buf4, 1, 1 )
+        when SSH_MSG_USERAUTH_SUCCESS
+        then
+          info_msg( p_algo || ' public key OK' );
+          l_rv := true;
+        when SSH_MSG_USERAUTH_FAILURE
+        then
+          info_msg( p_algo || ' public key not OK' );
+        when SSH_MSG_USERAUTH_PK_OK
+        then
+          info_msg( 'server accepts ' || p_algo || ' public key' );
+          l_pk_OK := true;
+          l_buf := utl_raw.overlay( '01'
+                                  , l_buf
+                                  , 37 + utl_raw.length( utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) )
+                                  , 1
+                                  );
+      end case;
+      return l_rv;
+    end;
+    --
+    function get_len( p_key raw, p_ind in out pls_integer )
+    return pls_integer
+    is
+      l_len pls_integer;
+      l_tmp pls_integer;
+    begin
+      p_ind := p_ind + 1;
+      l_len := to_number( utl_raw.substr( p_key, p_ind, 1 ), 'xx' );
+      if l_len > 127
+      then
+        l_tmp := l_len - 128;
+        p_ind := p_ind + 1;
+        l_len := to_number( utl_raw.substr( p_key, p_ind, l_tmp ), rpad( 'x', 2 * l_tmp, 'x' ) );
+        p_ind := p_ind + l_tmp;
+      else
+        p_ind := p_ind + 1;
+      end if;
+      return l_len;
+    end;
+    --
+    function get_integer( p_key raw, p_ind in out pls_integer, p_msg varchar2 := '' )
+    return raw
+    is
+      l_len pls_integer;
+    begin
+      if utl_raw.substr( p_key, p_ind, 1 ) != c_INTEGER
+      then
+        if p_msg is not null
+        then
+          info_msg( p_msg );
+        end if;
+        raise value_error;
+      end if;
+      l_len := get_len( p_key, p_ind );
+      p_ind := p_ind + l_len;
+      return utl_raw.substr( p_key, p_ind - l_len, l_len );
+    end;
+    --
+    function parse_DER_DSA_key
+      ( p_key raw
+      , p_p out raw
+      , p_q out raw
+      , p_g out raw
+      , p_x out raw
+      , p_y out raw
+      )
+    return boolean
+    is
+      l_dummy raw(3999);
+      l_ind pls_integer;
+      l_len pls_integer;
+    begin
+      l_ind := 1;
+      if utl_raw.substr( p_key, l_ind, 1 ) != c_SEQUENCE
+      then
+        info_msg( 'Does not start with SEQUENCE' ); 
+        raise value_error;
+      end if;
+      l_len := get_len( p_key, l_ind );
+      l_dummy := get_integer( p_key, l_ind, 'No (dummy) INTEGER 0' );
+      p_p := get_integer( p_key, l_ind, 'No P INTEGER' );
+      p_q := get_integer( p_key, l_ind, 'No Q INTEGER' );
+      p_g := get_integer( p_key, l_ind, 'No G INTEGER' );
+      p_y := get_integer( p_key, l_ind, 'No Y INTEGER' );
+      p_x := get_integer( p_key, l_ind, 'No x INTEGER' );
+      return true;
+    exception when value_error
+      then
+        p_p := null;
+        p_q := null;
+        p_g := null;
+        p_x := null;
+        p_y := null;
+        return false;
+    end;
+    --
+    function decrypt_private_key( p_key varchar2, p_pw raw )
+    return raw
+    is
+      l_rv raw(32767); 
+      l_key varchar2(32767);
+      l_pos pls_integer;
+      l_pos2 pls_integer;
+      l_algo varchar2(200);
+      l_iv   varchar2(200);
+      l_tmp raw(200);
+      l_key_size pls_integer;
+      l_encr_key raw(200);
+      l_encr_algo pls_integer;
+    begin
+      l_key := substr( p_key, 22, length( p_key ) - 40 );
+      l_key := ltrim( l_key, '- ' || chr(10) || chr(13) );
+      l_key := rtrim( l_key, '- ' || chr(10) || chr(13) );
+      if substr( l_key, 1, 10 ) = 'Proc-Type:' and p_pw is not null
+      then
+        l_pos := instr( l_key, 'DEK-Info:' );
+        l_pos2 := instr( l_key, ',', l_pos );
+        l_algo := ltrim( substr( l_key, l_pos + 9, l_pos2 - l_pos - 9 ) );
+        if l_algo = 'DES-EDE3-CBC'
+        then
+          l_key_size := 24;
+          l_encr_algo := dbms_crypto.encrypt_3des;
+        elsif l_algo = 'AES-128-CBC'
+        then
+          l_key_size := 16;
+          l_encr_algo := dbms_crypto.encrypt_aes128;
+        elsif l_algo = 'AES-192-CBC'
+        then
+          l_key_size := 24;
+          l_encr_algo := dbms_crypto.encrypt_aes192;
+        elsif l_algo = 'AES-256-CBC'
+        then
+          l_key_size := 32;
+          l_encr_algo := dbms_crypto.encrypt_aes256;
+        else
+          return null;
+        end if;
+        l_pos := l_pos2;
+        l_pos2 := instr( l_key, chr(10), l_pos );
+        l_iv := substr( l_key, l_pos + 1, l_pos2 - l_pos - 1 );
+        l_iv := rtrim( ltrim( l_iv ), ' ' || chr(10) || chr(13) );
+        l_key := substr( l_key, l_pos2 + 1 );
+        l_key := ltrim( l_key, ' ' || chr(10) || chr(13) );
+        l_tmp := utl_raw.concat( p_pw, utl_raw.substr( l_iv, 1, 8 ) );
+        loop
+          l_tmp := dbms_crypto.hash( l_tmp, dbms_crypto.hash_md5 );
+          l_encr_key := utl_raw.concat( l_encr_key, l_tmp );
+          exit when utl_raw.length( l_encr_key ) >= l_key_size;
+          l_tmp := utl_raw.concat( l_tmp, p_pw, utl_raw.substr( l_iv, 1, 8 ) );
+        end loop;
+        l_encr_key := utl_raw.substr( l_encr_key, 1, l_key_size );
+        l_rv := dbms_crypto.decrypt( utl_encode.base64_decode( utl_raw.cast_to_raw( l_key ) )
+                                  , l_encr_algo + dbms_crypto.chain_cbc + dbms_crypto.PAD_PKCS5
+                                  , l_encr_key, l_iv );
+      else
+        l_rv := utl_encode.base64_decode( utl_raw.cast_to_raw( l_key ) );
+      end if;
+      return l_rv;
+    end;
+    --
+    function parse_DSA_private_key( p_key varchar2, p_pw raw )
+    return boolean
+    is
+      l_rv boolean;
+      l_p raw(3999);
+      l_q raw(3999);
+      l_g raw(3999);
+      l_x raw(3999);
+      l_y raw(3999);
+    begin
+      if (  substr( p_key, 1, 21 ) != 'BEGIN DSA PRIVATE KEY'
+         or substr( p_key, -19 ) != 'END DSA PRIVATE KEY'
+         )
+      then
+        return false;
+      end if;
+      l_rv := parse_DER_DSA_key(decrypt_private_key( p_key, p_pw ), l_p, l_q, l_g, l_x, l_y );
+      if l_rv
+      then
+        l_buf2 := null;
+        append_string( l_buf2, utl_i18n.string_to_raw( 'ssh-dss', 'US7ASCII' ) );
+        append_mpint( l_buf2, l_p );
+        append_mpint( l_buf2, l_q );
+        append_mpint( l_buf2, l_g );
+        append_mpint( l_buf2, l_y );
+        l_rv := write_pk( 'ssh-dss', l_buf2, null );
+        if not l_pk_OK
+        then
+          return l_rv;
+        end if;
+        declare
+          l_k raw(3999);
+          l_r raw(3999);
+          l_s raw(3999);
+          l_mq tp_mag;
+          l_dummy tp_mag;
+          l_idx pls_integer;
+          l_buf3 raw(3999);
+        begin
+          loop
+            l_k := dbms_crypto.randombytes( utl_raw.length( l_q ) );
+            l_idx := utl_raw.compare( l_k, l_q );
+            exit when utl_raw.substr( l_k, -3 ) != '000000' and utl_raw.substr( l_k, l_idx, 1 ) < utl_raw.substr( l_q, l_idx, 1 );
+          end loop;
+          l_mq := mag( l_q );
+          l_r := demag( xmod( mag( powmod( l_g, l_k, l_p ) ), l_mq ) );
+          append_string( l_buf3, g_session_id );
+          append_byte( l_buf3, l_buf );
+          l_dummy := mag( dbms_crypto.hash( l_buf3, HASH_SH1 ) );
+          l_dummy := xmod( radd( l_dummy, xmod( rmul( mag( l_x ), mag( l_r ) ), l_mq ) ), l_mq );
+          l_dummy := mulmod( l_dummy, powmod( mag( l_k ), nsub( l_mq, 2 ), l_mq ), l_mq );
+          l_s := demag( l_dummy );
+          l_s := utl_raw.overlay( l_s, utl_raw.copies( '00', 20 ), 21 - utl_raw.length( l_s ) );
+          l_r := utl_raw.overlay( l_r, utl_raw.copies( '00', 20 ), 21 - utl_raw.length( l_r ) );
+          l_buf3 := null;
+          append_string( l_buf3, utl_i18n.string_to_raw( 'ssh-dss', 'US7ASCII' ) );
+          append_string( l_buf3, utl_raw.concat( l_r, l_s ) );
+          l_rv := write_pk( 'ssh-dss', l_buf2, l_buf3 ); 
+        end;
+      end if;
+      return l_rv; 
+    end;
+    --
+    function parse_private_key( p_key varchar2, p_passphrase varchar2 := null )
+    return boolean
+    is
+      l_rv boolean;
+      l_key varchar2(32767);
+    begin
+      l_key := rtrim( p_key, '- ' || chr(10) || chr(13) );
+      l_key := ltrim( l_key, '- ' || chr(10) || chr(13) );
+      if instr( substr( l_key, 1, 50 ), 'DSA' ) > 0
+      then
+        l_rv := parse_DSA_private_key( l_key, utl_raw.cast_to_raw( p_passphrase ) );
+      else
+        l_rv := false;
+      end if;
+      return l_rv;    
+    end;
+  --
   begin
     l_rv := false;
     l_buf := SSH_MSG_SERVICE_REQUEST;
@@ -2195,7 +2515,15 @@ is
         l_idx := 2;
         auth_methods := read_name_list( l_idx, l_buf );
     end case;
-    return l_rv;
+    if l_rv
+    then
+      return true;
+    end if;
+    if p_priv_key is null
+    then
+      return false;
+    end if;
+    return parse_private_key( p_priv_key , p_passphrase );
   end;
   --
   procedure write_fxp_message( p_type raw, p_payload raw )
@@ -2473,6 +2801,38 @@ is
     l_rv := get_file( i_path, i_file );
   end;
   --  
+  function get_file( i_path varchar2, i_directory varchar2, i_filename varchar2 )
+  return boolean
+  is
+    l_file blob;
+    l_rv boolean;
+    l_fh utl_file.file_type;
+    l_len pls_integer := 32767;
+  begin
+    l_rv := get_file( i_path, l_file );
+    l_fh := utl_file.fopen( i_directory, i_filename, 'wb' );
+    for i in 0 .. trunc( ( dbms_lob.getlength( l_file ) - 1 ) / l_len )
+    loop
+      utl_file.put_raw( l_fh
+                      , dbms_lob.substr( l_file
+                                       , l_len
+                                       , i * l_len + 1
+                                       )
+                      );
+    end loop;
+    utl_file.fflush( l_fh );
+    utl_file.fclose( l_fh );
+    dbms_lob.freetemporary( l_file );
+    return l_rv;
+  end;
+  --  
+  procedure get_file( i_path varchar2, i_directory varchar2, i_filename varchar2 )
+  is
+    l_rv boolean;
+  begin
+    l_rv := get_file( i_path, i_directory, i_filename );
+  end;
+  --  
   function put_file( i_path varchar2, i_file blob )
   return boolean
   is
@@ -2565,6 +2925,38 @@ is
     l_rv := put_file( i_path, i_file );
   end;
   --  
+  function put_file( i_path varchar2, i_directory varchar2, i_filename varchar2 )
+  return boolean
+  is
+    l_bfile bfile;
+    l_file blob;
+    l_dest_offset integer := 1;
+    l_src_offset integer := 1;
+    l_rv boolean;
+  begin
+    dbms_lob.createtemporary( l_file, true );
+    l_bfile := bfilename( i_directory, i_filename );
+    dbms_lob.fileopen( l_bfile, dbms_lob.file_readonly );
+    dbms_lob.loadblobfromfile
+      ( dest_lob => l_file
+      , src_bfile => l_bfile
+      , amount => dbms_lob.lobmaxsize
+      , dest_offset => l_dest_offset
+      , src_offset => l_src_offset
+      );
+    l_rv := put_file( i_path => i_path, i_file => l_file );
+    dbms_lob.freetemporary( l_file );
+    dbms_lob.fileclose(l_bfile);
+    return l_rv;
+  end;
+  --  
+  procedure put_file( i_path varchar2, i_directory varchar2, i_filename varchar2 )
+  is
+    l_rv boolean;
+  begin
+    l_rv := put_file( i_path, i_directory, i_filename );
+  end;
+  --
   function read_dir( i_path varchar2 )
   return tp_dir_listing
   is
@@ -2682,10 +3074,12 @@ is
     return l_dir_listing;
   end;
   --
-  procedure login( i_user varchar2, i_password varchar2 )
+  procedure login( i_user varchar2, i_password varchar2 := null, i_priv_key varchar2 := null, i_passphrase varchar2 := null, i_log_level pls_integer := null )
   is
+    l_prev_log_level pls_integer := g_log_level;
   begin
-    if do_auth( i_user, i_password )
+    g_log_level := nvl( i_log_level, g_log_level );
+    if do_auth( i_user, i_password, i_priv_key, i_passphrase )
     then
       info_msg( 'logged in' );
       if open_sftp
@@ -2697,9 +3091,25 @@ is
     else
       raise_application_error( -20030, 'Could not login.' );
     end if;
+    g_log_level := l_prev_log_level;
+  exception
+    when others then
+      g_log_level := l_prev_log_level;
+      raise;
   end;
   --
-  procedure open_connection( p_host varchar2, p_port pls_integer, p_fingerprint varchar2, p_trust boolean )
+  procedure open_connection
+    ( p_host varchar2
+    , p_port pls_integer
+    , p_fingerprint varchar2
+    , p_trust boolean
+    , i_excluded_kex_algos   varchar2 := null
+    , i_preferred_kex_algos  varchar2 := null
+    , i_excluded_encr_algos  varchar2 := null
+    , i_preferred_encr_algos varchar2 := null
+    , i_excluded_pkey_algos  varchar2 := null
+    , i_preferred_pkey_algos varchar2 := null
+    )
   is
     l_buf raw(32767);
   begin
@@ -2716,6 +3126,13 @@ is
       g_compr_algo_c := null;
       g_compr_algo_s := null;
       g_session_id   := null;
+      my_globals := null;
+      my_globals.excluded_kex_algos   := i_excluded_kex_algos;
+      my_globals.preferred_kex_algos  := i_preferred_kex_algos;
+      my_globals.excluded_encr_algos  := i_excluded_encr_algos;
+      my_globals.preferred_encr_algos := i_preferred_encr_algos;
+      my_globals.excluded_pkey_algos  := i_excluded_pkey_algos;
+      my_globals.preferred_pkey_algos := i_preferred_pkey_algos;
       init_hmac_ids;
       --
       read_until( l_buf, SSH_MSG_KEXINIT );
@@ -2723,22 +3140,84 @@ is
     end if;
   end;
   --
-  procedure open_connection( i_host varchar2, i_port pls_integer := 22 )
+  procedure open_connection
+    ( i_host varchar2
+    , i_port pls_integer := 22
+    , i_excluded_kex_algos   varchar2 := null
+    , i_preferred_kex_algos  varchar2 := null
+    , i_excluded_encr_algos  varchar2 := null
+    , i_preferred_encr_algos varchar2 := null
+    , i_excluded_pkey_algos  varchar2 := null
+    , i_preferred_pkey_algos varchar2 := null
+    )
   is
   begin
-    open_connection( i_host, i_port, null, null );
+    open_connection
+      ( i_host
+      , i_port
+      , null
+      , null
+      , i_excluded_kex_algos
+      , i_preferred_kex_algos
+      , i_excluded_encr_algos
+      , i_preferred_encr_algos
+      , i_excluded_pkey_algos
+      , i_preferred_pkey_algos
+      );
   end;
   --
-  procedure open_connection( i_host varchar2, i_trust_server boolean, i_port pls_integer := 22 )
+  procedure open_connection
+    ( i_host varchar2
+    , i_trust_server boolean
+    , i_port pls_integer := 22
+    , i_excluded_kex_algos   varchar2 := null
+    , i_preferred_kex_algos  varchar2 := null
+    , i_excluded_encr_algos  varchar2 := null
+    , i_preferred_encr_algos varchar2 := null
+    , i_excluded_pkey_algos  varchar2 := null
+    , i_preferred_pkey_algos varchar2 := null
+    )
   is
   begin
-    open_connection( i_host, i_port, null, i_trust_server );
+    open_connection
+      ( i_host
+      , i_port
+      , null
+      , i_trust_server
+      , i_excluded_kex_algos
+      , i_preferred_kex_algos
+      , i_excluded_encr_algos
+      , i_preferred_encr_algos
+      , i_excluded_pkey_algos
+      , i_preferred_pkey_algos
+      );
   end;
   --
-  procedure open_connection( i_host varchar2, i_fingerprint varchar2, i_port pls_integer := 22 )
+  procedure open_connection
+    ( i_host varchar2
+    , i_fingerprint varchar2
+    , i_port pls_integer := 22
+    , i_excluded_kex_algos   varchar2 := null
+    , i_preferred_kex_algos  varchar2 := null
+    , i_excluded_encr_algos  varchar2 := null
+    , i_preferred_encr_algos varchar2 := null
+    , i_excluded_pkey_algos  varchar2 := null
+    , i_preferred_pkey_algos varchar2 := null
+    )
   is
   begin
-    open_connection( i_host, i_port, i_fingerprint, null );
+    open_connection
+      ( i_host
+      , i_port
+      , i_fingerprint
+      , null
+      , i_excluded_kex_algos
+      , i_preferred_kex_algos
+      , i_excluded_encr_algos
+      , i_preferred_encr_algos
+      , i_excluded_pkey_algos
+      , i_preferred_pkey_algos
+      );
   end;
   --
   procedure close_connection
