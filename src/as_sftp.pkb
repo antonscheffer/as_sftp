@@ -2860,6 +2860,7 @@ is
       if utl_raw.substr( l_buf, 1, 1 ) = SSH_FXP_STATUS
       then
         debug_msg( 'put_file: not opened' );
+        l_idx := 2;
         get_int32( l_idx, l_buf, l_dummy ); -- id
         get_int32( l_idx, l_buf, l_dummy ); -- reason code
         get_string( l_idx, l_buf, l_buf2 );
