@@ -1,4 +1,4 @@
-create or replace package body as_sftp
+CREATE OR REPLACE package body as_sftp
 is
   --
   type tp_mag is table of number index by pls_integer;
@@ -63,7 +63,7 @@ is
   g_iv_cypher_s2c_ctr number;
   --
   -- kex globals
-  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.03', 'US7ASCII' );
+  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.04', 'US7ASCII' );
   V_S raw(512);
   g_session_id raw(100);
   --
@@ -2325,6 +2325,43 @@ is
         return false;
     end;
     --
+    function parse_DER_RSA_key
+      ( p_key raw
+      , p_modulus out raw
+      , p_pub_exp out raw
+      , p_priv_exp out raw
+      )
+    return boolean
+    is
+      l_dummy raw(3999);
+      l_ind pls_integer;
+      l_len pls_integer;
+    begin
+      l_ind := 1;
+      if utl_raw.substr( p_key, l_ind, 1 ) != c_SEQUENCE
+      then
+        info_msg( 'Does not start with SEQUENCE' ); 
+        raise value_error;
+      end if;
+      l_len := get_len( p_key, l_ind );
+      l_dummy := get_integer( p_key, l_ind, 'No version INTEGER' );
+      p_modulus := get_integer( p_key, l_ind, 'No modulus INTEGER' );
+      p_pub_exp := get_integer( p_key, l_ind, 'No publicExponent INTEGER' );
+      p_priv_exp := get_integer( p_key, l_ind, 'No privateExponent INTEGER' );
+      l_dummy := get_integer( p_key, l_ind, 'No prime1 INTEGER' );
+      l_dummy := get_integer( p_key, l_ind, 'No prime2 INTEGER' );
+      l_dummy := get_integer( p_key, l_ind, 'No exponent1 INTEGER' );
+      l_dummy := get_integer( p_key, l_ind, 'No exponent2 INTEGER' );
+      l_dummy := get_integer( p_key, l_ind, 'No coefficient INTEGER' );
+      return true;
+    exception when value_error
+      then
+        p_pub_exp := null;
+        p_priv_exp := null;
+        p_modulus := null;
+        return false;
+    end;
+    --
     function decrypt_private_key( p_key varchar2, p_pw raw )
     return raw
     is
@@ -2387,6 +2424,54 @@ is
         l_rv := utl_encode.base64_decode( utl_raw.cast_to_raw( l_key ) );
       end if;
       return l_rv;
+    end;
+    --
+    function parse_RSA_private_key( p_key varchar2, p_pw raw )
+    return boolean
+    is
+      l_rv boolean;
+      l_modulus  raw(3999);
+      l_pub_exp  raw(3999);
+      l_priv_exp raw(3999);
+    begin
+      if (  substr( p_key, 1, 21 ) != 'BEGIN RSA PRIVATE KEY'
+         or substr( p_key, -19 ) != 'END RSA PRIVATE KEY'
+         )
+      then
+        return false;
+      end if;
+      l_rv := parse_DER_RSA_key(decrypt_private_key( p_key, p_pw ), l_modulus, l_pub_exp, l_priv_exp );
+      if l_rv
+      then 
+        l_buf2 := null;
+        append_string( l_buf2, utl_i18n.string_to_raw( 'ssh-rsa', 'US7ASCII' ) );
+        append_mpint( l_buf2, l_pub_exp );
+        append_mpint( l_buf2, l_modulus );
+        l_rv := write_pk( 'ssh-rsa', l_buf2, null );
+        if not l_pk_OK
+        then
+          return l_rv;
+        end if;
+        declare
+          l_buf3 raw(3999);
+          l_buf5 raw(3999);
+        begin
+          append_string( l_buf3, g_session_id );
+          append_byte( l_buf3, l_buf );
+          l_buf3 := powmod( utl_raw.concat( '0001'
+                                          , utl_raw.copies( 'FF', utl_raw.length( l_modulus ) - 38 - case when utl_raw.substr( l_modulus, 1, 1 ) = '00' then 1 else 0 end )
+                                          , '003021300906052B0E03021A05000414' -- fixed ASN.1 value
+                                          , dbms_crypto.hash( l_buf3, HASH_SH1 )
+                                          )
+                          , l_priv_exp
+                          , l_modulus
+                          );
+          append_string( l_buf5, utl_i18n.string_to_raw( 'ssh-rsa', 'US7ASCII' ) );
+          append_string( l_buf5, l_buf3 );
+          l_rv := write_pk( 'ssh-rsa', l_buf2, l_buf5 ); 
+        end;
+      end if;
+      return l_rv; 
     end;
     --
     function parse_DSA_private_key( p_key varchar2, p_pw raw )
@@ -2463,6 +2548,9 @@ is
       if instr( substr( l_key, 1, 50 ), 'DSA' ) > 0
       then
         l_rv := parse_DSA_private_key( l_key, utl_raw.cast_to_raw( p_passphrase ) );
+      elsif instr( substr( l_key, 1, 50 ), 'RSA' ) > 0
+      then
+        l_rv := parse_RSA_private_key( l_key, utl_raw.cast_to_raw( p_passphrase ) );
       else
         l_rv := false;
       end if;
@@ -2476,27 +2564,12 @@ is
     write_packet( l_buf );
     read_until( l_buf, SSH_MSG_SERVICE_ACCEPT );
     info_msg( 'ssh-userauth accepted' );
-    l_buf := SSH_MSG_USERAUTH_REQUEST;
-    append_string( l_buf, utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) );
-    append_string( l_buf, utl_i18n.string_to_raw( 'ssh-connection', 'US7ASCII' ) );
-    append_string( l_buf, utl_i18n.string_to_raw( 'none', 'US7ASCII' ) );
-    write_packet( l_buf );
-    read_until( l_buf, SSH_MSG_USERAUTH_SUCCESS, SSH_MSG_USERAUTH_FAILURE );
-    case utl_raw.substr( l_buf, 1, 1 )
-      when SSH_MSG_USERAUTH_SUCCESS
-      then
-        info_msg( 'can connect with method none!' );
-        l_rv := true;
-      when SSH_MSG_USERAUTH_FAILURE
-      then
-        l_idx := 2;
-        auth_methods := read_name_list( l_idx, l_buf );
-        show_name_list( auth_methods );
-    end case;
-    if l_rv
+    -- first try publickey
+    if p_priv_key is not null and parse_private_key( p_priv_key, p_passphrase )
     then
       return true;
     end if;
+    -- try password
     l_buf := SSH_MSG_USERAUTH_REQUEST;
     append_string( l_buf, utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) );
     append_string( l_buf, utl_i18n.string_to_raw( 'ssh-connection', 'US7ASCII' ) );
@@ -2519,11 +2592,25 @@ is
     then
       return true;
     end if;
-    if p_priv_key is null
-    then
-      return false;
-    end if;
-    return parse_private_key( p_priv_key , p_passphrase );
+    -- probably won't work, but doesn't hurt to try
+    l_buf := SSH_MSG_USERAUTH_REQUEST;
+    append_string( l_buf, utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( 'ssh-connection', 'US7ASCII' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( 'none', 'US7ASCII' ) );
+    write_packet( l_buf );
+    read_until( l_buf, SSH_MSG_USERAUTH_SUCCESS, SSH_MSG_USERAUTH_FAILURE );
+    case utl_raw.substr( l_buf, 1, 1 )
+      when SSH_MSG_USERAUTH_SUCCESS
+      then
+        info_msg( 'can connect with method none!' );
+        l_rv := true;
+      when SSH_MSG_USERAUTH_FAILURE
+      then
+        l_idx := 2;
+        auth_methods := read_name_list( l_idx, l_buf );
+    --    show_name_list( auth_methods );
+    end case;
+    return l_rv;
   end;
   --
   procedure write_fxp_message( p_type raw, p_payload raw )
