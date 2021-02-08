@@ -6,11 +6,20 @@ is
   type tp_ec_point is record
     ( x tp_mag
     , y tp_mag
+    , z tp_mag
     );
   type tp_ec_curve is record
     ( prime tp_mag
+    , group_order tp_mag
     , a tp_mag
     , b tp_mag
+    , p_plus_1_div_4 tp_mag
+    , generator tp_ec_point
+    , nlen pls_integer
+    );
+  type tp_ed_curve is record
+    ( b pls_integer
+    , un raw(3999)
     );
   --
   type tp_ssh_channel is record
@@ -23,6 +32,9 @@ is
          );
   --
   type tp_name_list is table of varchar2(100 char );
+  --
+  function mag( p1 varchar2 )
+  return tp_mag;
   --
   -- some globals
   g_con          utl_tcp.connection;
@@ -41,8 +53,8 @@ is
          , preferred_kex_algos  varchar2(32767)
          , excluded_encr_algos  varchar2(32767)
          , preferred_encr_algos varchar2(32767)
-         , excluded_pkey_algos   varchar2(32767)
-         , preferred_pkey_algos  varchar2(32767)
+         , excluded_pkey_algos  varchar2(32767)
+         , preferred_pkey_algos varchar2(32767)
          );
   my_globals tp_my_globals;
   --
@@ -52,6 +64,9 @@ is
   cmm number := cm-1;
   cm2 number := cm / 2;
   cmi number := power( 16, -ccc );
+  c_mag_0 constant tp_mag := mag( '0' );  
+  c_mag_3 constant tp_mag := mag( '3' );  
+  c_mag_4 constant tp_mag := mag( '4' );  
   --
   -- cypher and mac globals
   g_iv_cypher_c2s raw(100);
@@ -63,7 +78,7 @@ is
   g_iv_cypher_s2c_ctr number;
   --
   -- kex globals
-  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.04', 'US7ASCII' );
+  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.08', 'US7ASCII' );
   V_S raw(512);
   g_session_id raw(100);
   --
@@ -177,7 +192,7 @@ is
   procedure info_msg( p_msg in varchar2 )
   is
   begin
-    if g_log_level >= 3
+    if g_log_level between 1 and 3
     then
       log( p_msg );
     end if;
@@ -186,7 +201,7 @@ is
   procedure log_msg( p_msg in varchar2 )
   is
   begin
-    if g_log_level >= 2
+    if g_log_level between 1 and 2
     then
       log( p_msg );
     end if;
@@ -367,7 +382,7 @@ is
       end if;
       rv( i ) := t;
     end loop;
-    while rv( rv.last ) = 0
+    while rv( rv.last ) = 0 and rv.count > 1
     loop
       rv.delete( rv.last );
     end loop;
@@ -676,6 +691,18 @@ is
     return rv;
   end;
   --
+  function addmod( p1 tp_mag, p2 tp_mag, m tp_mag )
+  return tp_mag
+  is
+    rv tp_mag := radd( p1, p2 );
+  begin
+    if r_greater_equal( rv, m )
+    then
+      rv := rsub( rv, m );
+    end if;
+    return rv;
+  end;
+  --
   function submod( p1 tp_mag, p2 tp_mag, m tp_mag )
   return tp_mag
   is
@@ -693,6 +720,50 @@ is
   is
   begin
     return xmod( rmul( p1, p2 ), m );
+  end;
+  --
+  function small_nmulmod( p1 tp_mag, n number, m tp_mag )
+  return tp_mag
+  is
+    rv tp_mag := nmul( p1, n );
+  begin
+    for i in 1 .. 5  -- expect n < 5
+    loop
+      exit when not r_greater_equal( rv, m );
+      if i = 5
+      then
+        rv := xmod( rv, m );
+      else
+        rv := rsub( rv, m );
+      end if;
+    end loop;
+    return rv;
+  end;
+  --
+  function rdiv2( p1 tp_mag )
+  return tp_mag
+  is
+    c number;
+    t number;
+    rv tp_mag;
+  begin
+    if p1.count = 1
+    then
+      rv(0) := trunc( p1( 0 ) / 2 );
+    else
+      c := 0;
+      for i in reverse 0 .. p1.count - 1
+      loop
+        t := p1( i ) + c;
+        rv( i ) := trunc( t / 2 );
+        c :=  case when bitand( t, 1 ) = 1 then cm else 0 end;
+      end loop;
+      while rv( rv.last ) = 0
+      loop
+        rv.delete( rv.last );
+      end loop;
+    end if;
+    return rv;
   end;
   --
   function powmod( pa tp_mag, pb tp_mag, pm tp_mag )
@@ -900,90 +971,273 @@ is
     return demag( powmod( mag( pa ), mag( pb ), mag( pm ) ) );
   end;
   --
-  function double_point( pa tp_ec_point, pc tp_ec_curve )
+  procedure get_named_ed_curve( p_name in varchar2, p_curve out tp_ed_curve )
+  is
+  begin
+    if p_name = 'ed25519'
+    then
+      p_curve.b := 256;
+      p_curve.un := hextoraw( '7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff
+' );
+    end if;
+  end;
+  --
+  procedure get_named_curve( p_name in varchar2, p_curve out tp_ec_curve )
+  is
+  begin
+    if p_name = 'nistp256'
+    then
+      p_curve.nlen := 32;
+      p_curve.prime          := mag( 'ffffffff00000001000000000000000000000000ffffffffffffffffffffffff' );
+      p_curve.group_order    := mag( 'ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551' );
+      p_curve.a              := mag( 'ffffffff00000001000000000000000000000000fffffffffffffffffffffffc' );
+      p_curve.b              := mag( '5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b' );
+      p_curve.generator.x    := mag( '6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296' );
+      p_curve.generator.y    := mag( '4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5' );
+      p_curve.p_plus_1_div_4 := mag( '3fffffffc0000000400000000000000000000000400000000000000000000000' );
+    elsif p_name = 'nistp384'
+    then
+      p_curve.nlen := 48;
+      p_curve.prime          := mag( 'fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff' );
+      p_curve.group_order    := mag( 'ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973' );
+      p_curve.a              := mag( 'fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000fffffffc' );
+      p_curve.b              := mag( 'b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef' );
+      p_curve.generator.x    := mag( 'aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7' );
+      p_curve.generator.y    := mag( '3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f' );
+      p_curve.p_plus_1_div_4 := mag( '3fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffbfffffffc00000000000000040000000' );
+    elsif p_name = 'nistp521'
+    then
+      p_curve.nlen := 66;
+      p_curve.prime          := mag( '1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' );
+      p_curve.group_order    := mag( '1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409' );
+      p_curve.a              := mag( '1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc' );
+      p_curve.b              := mag( '51953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00' );
+      p_curve.generator.x    := mag( 'c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66' );
+      p_curve.generator.y    := mag( '11839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650' );
+      p_curve.p_plus_1_div_4 := mag( '8000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000' );
+    end if;
+  end;
+  --
+  procedure bytes_to_ec_point( p_bytes raw, p_curve tp_ec_curve, p_point out tp_ec_point )
+  is
+    l_first varchar2(2);
+    l_y2 tp_mag;
+  begin
+    l_first := utl_raw.substr( p_bytes, 1, 1 );
+    if not (  ( l_first = '04' and utl_raw.length( p_bytes ) = 1 + 2 * p_curve.nlen )
+           or ( l_first in ( '02', '03' ) and utl_raw.length( p_bytes ) = 1 + p_curve.nlen )
+           )
+    then
+      raise_application_error( -20024, 'invalid encoded EC point.' );
+    end if;
+    if l_first = '04'
+    then
+      p_point.x := mag( utl_raw.substr( p_bytes, 2, p_curve.nlen ) );
+      p_point.y := mag( utl_raw.substr( p_bytes, 2 + p_curve.nlen, p_curve.nlen ) );
+      -- check if it's a point on the curve
+      if not requal( addmod( addmod( powmod( p_point.x, mag( '3' ), p_curve.prime )
+                                   , mulmod( p_point.x, p_curve.a, p_curve.prime )
+                                   , p_curve.prime
+                                   )
+                           , p_curve.b
+                           , p_curve.prime
+                           )
+                   , mulmod( p_point.y, p_point.y, p_curve.prime )
+                   )
+      then
+        raise_application_error( -20025, 'EC Point is not on EC Curve.' );
+      end if;
+    else
+      -- see https://tools.ietf.org/id/draft-jivsov-ecc-compact-05.html
+      p_point.x := mag( utl_raw.substr( p_bytes, 2, p_curve.nlen ) );
+      l_y2 := addmod( addmod( powmod( p_point.x, mag( '3' ), p_curve.prime )
+                            , mulmod( p_point.x, p_curve.a, p_curve.prime )
+                            , p_curve.prime
+                            )
+                    , p_curve.b
+                    , p_curve.prime
+                    );
+      if l_first = '02'
+      then
+        p_point.y := powmod( l_y2, p_curve.p_plus_1_div_4, p_curve.prime );
+      else
+        p_point.y := rsub( p_curve.prime, powmod( l_y2, p_curve.p_plus_1_div_4, p_curve.prime ) );
+      end if;
+      -- raise_application_error( -20023, 'EC Point compression not supported.' );
+    end if;
+  end;
+  --
+  function from_jacobian( p_point tp_ec_point, p_curve tp_ec_curve )
   return tp_ec_point
   is
-    slope tp_mag;
-    rv tp_ec_point;
+    l_inv tp_mag;
+    l_tmp tp_mag;
+    l_rv tp_ec_point;
   begin
-    if pa.x.count = 0
+    if p_point.z(0) = 1 and p_point.z.count = 1
     then
-      return pa;
+      l_rv.x := p_point.x;
+      l_rv.y := p_point.y;
+    elsif p_point.y(0) = 0 and p_point.y.count = 1
+    then -- infinity
+      l_rv.x := c_mag_0;
+      l_rv.y := c_mag_0;
+    else
+      l_inv := powmod( p_point.z, nsub( p_curve.prime, 2 ), p_curve.prime );
+      l_tmp := mulmod( l_inv, l_inv, p_curve.prime );
+      l_rv.x := mulmod( p_point.x, l_tmp, p_curve.prime );
+      l_rv.y := mulmod( p_point.y, mulmod( l_tmp, l_inv, p_curve.prime ), p_curve.prime );
     end if;
-    slope := nmul( powmod( pa.x, mag( '02' ), pc.prime ), 3 );
-    slope := xmod( radd( slope, pc.a ), pc.prime );
-    slope := mulmod( slope, powmod( nmul( pa.y, 2 ), nsub( pc.prime, 2 ), pc.prime ), pc.prime );
-    rv.x := submod( powmod( slope, mag( '02' ), pc.prime ), xmod( nmul( pa.x, 2 ), pc.prime ), pc.prime );
-    rv.y := mulmod( slope, submod( pa.x, rv.x, pc.prime ), pc.prime );
-    rv.y := submod( rv.y, pa.y, pc.prime );
---    info_msg( 'dbl nx ' || demag( rv.x ) );
---    info_msg( 'dbl ny ' || demag( rv.y ) );
-    return rv;
-    exception when others then
-      error_msg( dbms_utility.format_error_backtrace );
-      error_msg( 'x ' || demag( pa.x ) );
-      error_msg( 'y ' || demag( pa.y ) );
-      raise;
+    return l_rv;
   end;
+  --
+  function to_jacobian( p_point tp_ec_point )
+  return tp_ec_point
+  is
+    l_rv tp_ec_point;
+  begin
+    l_rv.x := p_point.x;
+    l_rv.y := p_point.y;
+    l_rv.z := mag( '1' );
+    return l_rv;
+  end;
+  --
+  function double_jpoint( p tp_ec_point, c tp_ec_curve )
+  return tp_ec_point
+  is
+    l_ysqr tp_mag;
+    l_z4 tp_mag;
+    l_s tp_mag;
+    l_m tp_mag;
+    l_rv tp_ec_point;
+    c_mag_4 tp_mag := mag( '4' );
+  begin
+    if p.y(0) = 0 and p.y.count = 1
+    then -- infinity
+      l_rv.x := c_mag_0;
+      l_rv.y := c_mag_0;
+      l_rv.z := c_mag_0;
+    else
+      l_ysqr := mulmod( p.y, p.y, c.prime );
+      l_z4 := powmod( p.z, c_mag_4, c.prime );
+      l_s := mulmod( small_nmulmod( p.x, 4, c.prime ), l_ysqr, c.prime );
+      l_m := addmod( small_nmulmod( mulmod( p.x, p.x, c.prime )
+                                  , 3
+                                  , c.prime
+                                  )
+                   , mulmod( c.a, l_z4, c.prime )      
+                   , c.prime
+                   );
+      l_rv.x := submod( mulmod( l_m, l_m, c.prime )
+                      , small_nmulmod( l_s, 2, c.prime )
+                      , c.prime
+                      );
+      l_rv.y := submod( mulmod( l_m, submod( l_s, l_rv.x, c.prime ), c.prime )
+                      , small_nmulmod( mulmod( l_ysqr, l_ysqr, c.prime ), 8, c.prime )
+                      , c.prime
+                      );
+      l_rv.z := mulmod( small_nmulmod( p.y, 2, c.prime ), p.z, c.prime );
+    end if;
+    return l_rv;
+  end;
+  --
+  function add_jpoint( p1 tp_ec_point, p2 tp_ec_point, c tp_ec_curve )
+  return tp_ec_point
+  is
+    l_p1z_pwr2 tp_mag;
+    l_p2z_pwr2 tp_mag;
+    l_u1 tp_mag;
+    l_u2 tp_mag;
+    l_s1 tp_mag;
+    l_s2 tp_mag;
+    l_h tp_mag;
+    l_h2 tp_mag;
+    l_h3 tp_mag;
+    l_r tp_mag;
+    l_u1h2 tp_mag;
+    l_rv tp_ec_point;
+  begin
+    if p1.y(0) = 0 and p1.y.count = 1
+    then -- infinity
+      return p2;
+    end if;
+    if p2.y(0) = 0 and p2.y.count = 1
+    then -- infinity
+      return p1;
+    end if;
+    l_p1z_pwr2 := mulmod( p1.z, p1.z, c.prime );
+    l_p2z_pwr2 := mulmod( p2.z, p2.z, c.prime );
+    l_u1 := mulmod( p1.x, l_p2z_pwr2, c.prime );
+    l_u2 := mulmod( p2.x, l_p1z_pwr2, c.prime );
+    l_s1 := mulmod( p1.y, mulmod( l_p2z_pwr2, p2.z, c.prime ), c.prime );
+    l_s2 := mulmod( p2.y, mulmod( l_p1z_pwr2, p1.z, c.prime ), c.prime );
+    if requal( l_u1, l_u2 )
+    then
+       if requal( l_s1, l_s2 )
+       then
+         l_rv := double_jpoint( p1, c );
+       else
+         l_rv.x := c_mag_0; -- infinity
+         l_rv.y := c_mag_0;
+         l_rv.z := c_mag_0;
+       end if;
+    else
+      l_h := submod( l_u2, l_u1, c.prime );
+      l_r := submod( l_s2, l_s1, c.prime );
+      l_h2 := mulmod( l_h, l_h, c.prime );
+      l_h3 := mulmod( l_h2, l_h, c.prime );
+      l_u1h2 := mulmod( l_h2, l_u1, c.prime );
+      l_rv.x := submod( submod( mulmod( l_r, l_r, c.prime ), l_h3, c.prime )
+                      , small_nmulmod( l_u1h2, 2, c.prime )
+                      , c.prime
+                      );
+      l_rv.y := submod( mulmod( l_r, submod( l_u1h2, l_rv.x, c.prime ), c.prime )
+                      , mulmod( l_s1, l_h3, c.prime )
+                      , c.prime
+                      );
+      l_rv.z := mulmod( l_h, mulmod( p1.z, p2.z, c.prime ), c.prime ); 
+    end if;
+    return l_rv;
+  end;
+  --
+  function multiply_jpoint( p tp_ec_point, m tp_mag, c tp_ec_curve )
+  return tp_ec_point
+  is
+    l_rv tp_ec_point;
+  begin
+    if p.y(0) = 0 and p.y.count = 1
+    then -- infinity
+      l_rv.x := c_mag_0;
+      l_rv.y := c_mag_0;
+      l_rv.z := c_mag_0;
+    elsif m(0) = 1 and m.count = 1
+    then
+      l_rv := p;
+    elsif r_greater_equal( m, c.group_order )
+    then
+      l_rv := multiply_jpoint( p, xmod( m, c.group_order ), c );
+    elsif bitand( m(0), 1 ) = 0
+    then
+      l_rv := double_jpoint( multiply_jpoint( p, rdiv2( m ), c ), c );
+    else
+      l_rv := add_jpoint( double_jpoint( multiply_jpoint( p, rdiv2( m ), c ), c ), p, c );
+    end if;
+    return l_rv;
+  end;
+  --
   -- 
   function add_point( pa tp_ec_point, pb tp_ec_point, pc tp_ec_curve )
   return tp_ec_point
   is
-    slope tp_mag;
-    rv tp_ec_point;
   begin
-    if requal( pa.x, pb.x ) and requal( pa.y, pb.y )
-    then
-      return double_point( pa, pc );
-    elsif pa.x.count = 0
-    then
-      return pb;
-    elsif pb.x.count = 0
-    then
-      return pa;
-    end if;
-    slope := powmod( submod( pa.x, pb.x, pc.prime ), nsub( pc.prime, 2 ), pc.prime );
-    slope := mulmod( submod( pa.y, pb.y, pc.prime ), slope, pc.prime );
-    rv.x := powmod( slope, mag( '02' ), pc.prime );
-    rv.x := submod( submod( rv.x, pa.x, pc.prime ), pb.x, pc.prime );
-    rv.y := mulmod( slope, submod( pb.x, rv.x, pc.prime ), pc.prime );
-    rv.y := submod( rv.y, pb.y, pc.prime );
---    info_msg( 'add nx ' || demag( rv.x ) );
---    info_msg( 'add ny ' || demag( rv.y ) );
-    return rv;
+    return from_jacobian( add_jpoint( to_jacobian( pa ), to_jacobian( pb ), pc ), pc );
   end;
   -- 
   function multiply_point( pa tp_ec_point, pm tp_mag, pc tp_ec_curve )
   return tp_ec_point
   is
-    nr number;
-    hb boolean := false;
-    sb varchar2(3999);
-    rv tp_ec_point;
   begin
-    sb := nvl( ltrim( demag( xmod( pm, pc.prime ) ), '0' ), '0' );
-    for i in 1 .. length( sb )
-    loop
-      nr := to_number( substr( sb, i, 1 ), 'x' );
-      for j in reverse 0 .. 3
-      loop
-        if not hb and bitand( nr, power( 2, j ) ) > 0
-        then
-          hb := true;
-        end if;
-        if hb
-        then
-          rv := double_point( rv, pc );        
-        end if;
-        if bitand( nr, power( 2, j ) ) > 0
-        then
-          rv := add_point( rv, pa, pc );
-        end if;
-      end loop;
-    end loop;
---    info_msg( 'nx ' || demag( rv.x ) );
---    info_msg( 'ny ' || demag( rv.y ) );
-    return rv;
+    return from_jacobian( multiply_jpoint( to_jacobian( pa ), pm, pc ), pc );
   end;
   --
   procedure init_hmac_ids
@@ -1125,6 +1379,10 @@ is
                                   , g_key_cypher_s2c
                                   );
       g_iv_cypher_s2c_ctr := g_iv_cypher_s2c_ctr + 1;
+      if g_iv_cypher_s2c_ctr > 340282366920938463463374607431768211455
+      then
+        g_iv_cypher_s2c_ctr := 0;
+      end if;
       return utl_raw.bit_xor( l_tmp, p_encr );
     end if;
     if g_encr_algo_s in ( 'aes128-cbc', 'aes192-cbc', 'aes256-cbc', 'rijndael256-cbc', 'rijndael-cbc@lysator.liu.se' )
@@ -1651,19 +1909,31 @@ is
       l_rsa_s raw(32767);
       l_hash_len pls_integer;      
       l_hash_type pls_integer;
+      --
+      l_identifier raw(32767);
+      l_pub_w raw(32767);
+      l_curve tp_ec_curve;
+      l_inv tp_mag;
+      l_ecdsa_u1 tp_mag;
+      l_ecdsa_u2 tp_mag;
+      l_ecdsa_r raw(32767);
+      l_ecdsa_s raw(32767);
+      l_ecdsa_w tp_ec_point;
+      l_ecdsa_verify tp_ec_point;
     begin
       l_idx := 1;
       get_string( l_idx, p_host_key, l_tmp );
       debug_msg( 'validating host key using algorithm ' || utl_raw.cast_to_varchar2( l_tmp ) );
       if l_tmp = hextoraw( '7373682D647373' ) -- ssh-dss
       then
-        info_msg( 'trying ssh-dss' );
+        debug_msg( 'trying ' || utl_raw.cast_to_varchar2( l_tmp ) );
         get_mpint( l_idx, p_host_key, l_p );
         get_mpint( l_idx, p_host_key, l_q );
         get_mpint( l_idx, p_host_key, l_g );
         get_mpint( l_idx, p_host_key, l_y );
         l_idx := 1;
         get_string( l_idx, p_signature, l_tmp );
+        debug_msg( 'trying signature ' || utl_raw.cast_to_varchar2( l_tmp ) );
         if l_tmp != hextoraw( '7373682D647373' ) -- ssh-dss
         then
           raise_application_error( -20011, 'ssh-dss not OK' );
@@ -1689,6 +1959,7 @@ is
         get_mpint( l_idx, p_host_key, l_rsa_n );
         l_idx := 1;
         get_string( l_idx, p_signature, l_tmp );
+        debug_msg( 'trying signature ' || utl_raw.cast_to_varchar2( l_tmp ) );
         if l_tmp = hextoraw( '7373682D727361' ) -- ssh-rsa
         then
           l_hash_len := 20;
@@ -1710,6 +1981,77 @@ is
         then
           raise_application_error( -20015, 'ssh-rsa not OK' );
         end if;
+      elsif l_tmp in ( hextoraw( '65636473612D736861322D6E69737470323536' ) -- ecdsa-sha2-nistp256
+                     , hextoraw( '65636473612D736861322D6E69737470333834' ) -- ecdsa-sha2-nistp384
+                     , hextoraw( '65636473612D736861322D6E69737470353231' ) -- ecdsa-sha2-nistp521
+                     )
+      then
+        debug_msg( 'trying ' || utl_raw.cast_to_varchar2( l_tmp ) );
+        get_string( l_idx, p_host_key, l_identifier );
+        if l_identifier != utl_raw.substr( l_tmp, - utl_raw.length( l_identifier ) )
+        then
+          raise_application_error( -20019, 'ECDSA not OK' );
+        end if;
+        get_named_curve( utl_raw.cast_to_varchar2( l_identifier ), l_curve );
+        get_string( l_idx, p_host_key, l_tmp );
+        bytes_to_ec_point( l_tmp, l_curve, l_ecdsa_w );
+        l_idx := 1;
+        get_string( l_idx, p_signature, l_tmp );
+        debug_msg( 'trying signature ' || utl_raw.cast_to_varchar2( l_tmp ) );
+        if l_tmp = hextoraw( '65636473612D736861322D6E69737470323536' ) -- ecdsa-sha2-nistp256
+        then
+          l_hash_type := HASH_SH256;
+        elsif l_tmp = hextoraw( '65636473612D736861322D6E69737470333834' ) -- ecdsa-sha2-nistp384
+        then
+          l_hash_type := HASH_SH384;
+        elsif l_tmp = hextoraw( '65636473612D736861322D6E69737470353231' ) -- ecdsa-sha2-nistp521
+        then
+          l_hash_type := HASH_SH512;
+        else
+          raise_application_error( -20020, 'ECDSA not OK' );
+        end if;
+        get_string( l_idx, p_signature, l_tmp ); -- signature blob
+        l_idx := 1;
+        get_mpint( l_idx, l_tmp, l_ecdsa_r );
+        get_mpint( l_idx, l_tmp, l_ecdsa_s );
+        l_inv := powmod( mag( l_ecdsa_s ), nsub( l_curve.group_order, 2 ), l_curve.group_order );
+        l_ecdsa_u1 := mulmod( mag( dbms_crypto.hash( l_h, l_hash_type ) ), l_inv, l_curve.group_order );
+        l_ecdsa_u2 := mulmod( mag( l_ecdsa_r ), l_inv, l_curve.group_order );
+        l_ecdsa_verify := add_point( multiply_point( l_curve.generator, l_ecdsa_u1, l_curve )
+                                   , multiply_point( l_ecdsa_w, l_ecdsa_u2, l_curve )
+                                   , l_curve );
+        if utl_raw.compare( demag( l_ecdsa_verify.x ), ltrim( l_ecdsa_r, '0' ) ) != 0
+        then
+          raise_application_error( -20021, 'ECDSA not OK' );
+        end if;
+      elsif l_tmp in ( hextoraw( '7373682D65643235353139' ) -- ssh-ed25519
+                     , hextoraw( '7373682D6564343438' )     -- ssh-ed448
+                     )
+      then
+        debug_msg( 'trying ' || utl_raw.cast_to_varchar2( l_tmp ) );
+        declare
+          l_pub_key raw(32767);
+          l_signature_key raw(32767);
+          l_signature_blob raw(32767);
+          l_ed_curve tp_ed_curve;
+        begin
+          get_string( l_idx, p_host_key, l_pub_key );
+          l_idx := 1;
+          get_string( l_idx, p_signature, l_signature_key );
+          debug_msg( 'trying signature ' || utl_raw.cast_to_varchar2( l_signature_key ) );
+          if l_signature_key != l_tmp
+          then
+            raise_application_error( -20026, 'EdDSA not OK' );
+          end if;
+          get_string( l_idx, p_signature, l_signature_blob );
+          get_named_ed_curve( substr( utl_raw.cast_to_varchar2( l_tmp ), 5 ), l_ed_curve );
+          if l_ed_curve.b / utl_raw.length( l_signature_blob ) != 4 or l_ed_curve.b / utl_raw.length( l_pub_key ) != 8
+          then 
+            debug_msg( l_ed_curve.b || ' ' || utl_raw.length( l_signature_blob ) || ' ' || utl_raw.length( l_pub_key ) );
+            raise_application_error( -20027, 'EdDSA not OK' );
+          end if;
+          raise_application_error( -20027, 'EdDSA not OK' );
+        end;
       else
         raise_application_error( -20010, 'unexpected public key algorithm ' || utl_raw.cast_to_varchar2( l_tmp ) );
       end if;
@@ -1730,12 +2072,12 @@ is
     languages_server_to_client  := read_name_list( l_idx, p_buf );
     first_kex_packet_follows := utl_raw.compare( utl_raw.substr( p_buf, l_idx, 1 ), '00' ) != 0;
     --
-    show_name_list( kex_algorithms );
-    show_name_list( public_key_algorithms );
+    --show_name_list( kex_algorithms );
+    --show_name_list( public_key_algorithms );
     --show_name_list( encr_algo_client_to_server );
-    show_name_list( encr_algo_server_to_client );
+    --show_name_list( encr_algo_server_to_client );
     --show_name_list( mac_algo_client_to_server );
-    show_name_list( mac_algo_server_to_client );
+    --show_name_list( mac_algo_server_to_client );
     --show_name_list( compr_algo_client_to_server );
     --show_name_list( compr_algo_server_to_client );
     --show_name_list( languages_client_to_server );
@@ -1754,9 +2096,14 @@ is
     my_public_key_algorithms := tp_name_list( 'ssh-dss', 'ssh-rsa' );
     add2name_list( my_public_key_algorithms, 'rsa-sha2-256' );
     add2name_list( my_public_key_algorithms, 'rsa-sha2-512' );
-    show_name_list( my_public_key_algorithms );
-    my_encr_algo_client_to_server := tp_name_list( 'aes128-cbc', '3des-cbc' );
+--    add2name_list( my_public_key_algorithms, 'ssh-ed25519' );
+    add2name_list( my_public_key_algorithms, 'ecdsa-sha2-nistp256' );
+    add2name_list( my_public_key_algorithms, 'ecdsa-sha2-nistp384' );
+    add2name_list( my_public_key_algorithms, 'ecdsa-sha2-nistp521' );
+    my_encr_algo_client_to_server := tp_name_list( 'aes128-cbc', 'aes128-ctr', '3des-cbc' );
+    add2name_list( my_encr_algo_client_to_server, 'aes256-ctr' );
     add2name_list( my_encr_algo_client_to_server, 'aes256-cbc' );
+    add2name_list( my_encr_algo_client_to_server, 'aes192-ctr' );
     add2name_list( my_encr_algo_client_to_server, 'aes192-cbc' );
     my_encr_algo_server_to_client := tp_name_list( 'aes128-cbc', 'aes128-ctr', '3des-cbc' );
     add2name_list( my_encr_algo_server_to_client, 'aes256-cbc' );
@@ -1802,6 +2149,10 @@ is
     end loop;
     if l_encr_algo_c is null
     then
+      error_msg( 'as_sftp algorithms' );
+      show_name_list( my_encr_algo_client_to_server );
+      error_msg( 'server algorithms' );
+      show_name_list( encr_algo_client_to_server );
       raise_application_error( -20002, 'Could not find matching encryption algorithm client to server' );
     end if;
     --
@@ -1815,6 +2166,10 @@ is
     end loop;
     if l_encr_algo_s is null
     then
+      error_msg( 'as_sftp algorithms' );
+      show_name_list( my_encr_algo_server_to_client );
+      error_msg( 'server algorithms' );
+      show_name_list( encr_algo_server_to_client );
       raise_application_error( -20003, 'Could not find matching encryption algorithm server to client' );
     end if;
     info_msg( 'using ' || l_encr_algo_c || ', ' || l_encr_algo_s );
@@ -1871,7 +2226,7 @@ is
     then
       raise_application_error( -20007, 'Could not find matching compression algorithm server to client' );
     end if;
-    --
+    --    
     for i in my_public_key_algorithms.first .. my_public_key_algorithms.last
     loop
       if my_public_key_algorithms(i) member of public_key_algorithms
@@ -1882,8 +2237,13 @@ is
     end loop;
     if l_public_key_algorithm is null
     then
+      error_msg( 'as_sftp algorithms' );
+      show_name_list( my_public_key_algorithms );
+      error_msg( 'server algorithms' );
+      show_name_list( public_key_algorithms );
       raise_application_error( -20008, 'Could not find matching public key algorithm' );
     end if;
+    info_msg( 'using ' || l_public_key_algorithm );
     --
     for i in my_kex_algorithms.first .. my_kex_algorithms.last
     loop
@@ -1962,49 +2322,24 @@ is
         l_qc raw(3999);
         l_qs raw(3999);
         l_curve tp_ec_curve;
-        l_pa tp_ec_point;
         l_pb tp_ec_point;
-        l_order tp_mag;
         l_xxx tp_mag;
-        l_nlen pls_integer; -- in bytes
       begin
         l_buf := SSH_MSG_KEX_ECDH_INIT;
         if l_kex_algorithm = 'ecdh-sha2-nistp256'
         then
-          l_nlen := 32;
-          l_curve.prime := mag( 'FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF' );
-          l_curve.a :=     mag( 'ffffffff00000001000000000000000000000000fffffffffffffffffffffffc' );
-          l_curve.b :=     mag( '5ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b' );
-          l_pa.x := mag( '6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296' );
-          l_pa.y := mag( '4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5' );
-          l_order := mag( 'ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551' );
-          l_xxx := mag( dbms_crypto.randombytes( 4 ) );
           l_hash_type := HASH_SH256;
         elsif l_kex_algorithm = 'ecdh-sha2-nistp384'
         then
-          l_nlen := 48;
-          l_curve.prime := mag( 'fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000ffffffff' );
-          l_curve.a :=     mag( 'fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffeffffffff0000000000000000fffffffc' );
-          l_curve.b :=     mag( 'b3312fa7e23ee7e4988e056be3f82d19181d9c6efe8141120314088f5013875ac656398d8a2ed19d2a85c8edd3ec2aef' );
-          l_pa.x := mag( 'aa87ca22be8b05378eb1c71ef320ad746e1d3b628ba79b9859f741e082542a385502f25dbf55296c3a545e3872760ab7' );
-          l_pa.y := mag( '3617de4a96262c6f5d9e98bf9292dc29f8f41dbd289a147ce9da3113b5f0b8c00a60b1ce1d7e819d7a431d7c90ea0e5f' );
-          l_order := mag( 'ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973' );
-          l_xxx := mag( dbms_crypto.randombytes( 4 ) );
           l_hash_type := HASH_SH384;
         elsif l_kex_algorithm = 'ecdh-sha2-nistp521'
         then
-          l_nlen := 66;
-          l_curve.prime := mag( '1ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff' );
-          l_curve.a :=     mag( '1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc' );
-          l_curve.b :=     mag( '51953eb9618e1c9a1f929a21a0b68540eea2da725b99b315f3b8b489918ef109e156193951ec7e937b1652c0bd3bb1bf073573df883d2c34f1ef451fd46b503f00' );
-          l_pa.x := mag( 'c6858e06b70404e9cd9e3ecb662395b4429c648139053fb521f828af606b4d3dbaa14b5e77efe75928fe1dc127a2ffa8de3348b3c1856a429bf97e7e31c2e5bd66' );
-          l_pa.y := mag( '11839296a789a3bc0045c8a5fb42c7d1bd998f54449579b446817afbd17273e662c97ee72995ef42640c550b9013fad0761353c7086a272c24088be94769fd16650' );
-          l_order := mag( '1fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffa51868783bf2f966b7fcc0148f709a5d03bb5c9b8899c47aebb6fb71e91386409' );
-          l_xxx := mag( dbms_crypto.randombytes( 4 ) );
           l_hash_type := HASH_SH512;
         end if;
-        l_pb  := multiply_point( l_pa, l_xxx, l_curve );
-        l_qc := utl_raw.concat( '04', lpad( demag( l_pb.x ), 2 * l_nlen, '0' ), lpad( demag( l_pb.y ), 2 * l_nlen, '0' ) );
+        l_xxx := mag( dbms_crypto.randombytes( 4 ) );
+        get_named_curve( substr( l_kex_algorithm, -8 ), l_curve );
+        l_pb  := multiply_point( l_curve.generator, l_xxx, l_curve );
+        l_qc := utl_raw.concat( '04', lpad( demag( l_pb.x ), 2 * l_curve.nlen, '0' ), lpad( demag( l_pb.y ), 2 * l_curve.nlen, '0' ) );
         append_mpint( l_buf, l_qc );
         write_packet( l_buf );
         read_until( l_buf, SSH_MSG_KEX_ECDH_REPLY );
@@ -2012,15 +2347,8 @@ is
         get_string( l_idx, l_buf, K_S );
         get_string( l_idx, l_buf, l_qs );
         get_string( l_idx, l_buf, l_s );
-        if utl_raw.length( l_qs ) = 1 + 2 * l_nlen
-        then
-          l_pa.x := mag( utl_raw.substr( l_qs, 2, l_nlen ) );
-          l_pa.y := mag( utl_raw.substr( l_qs, 2 + l_nlen, l_nlen ) );
-        else
-          raise_application_error( -20016, 'Point compression not supported.' );
-        end if;
-        -- validate if l_qs is point on curve
-        l_pb  := multiply_point( l_pa, l_xxx, l_curve );
+        bytes_to_ec_point( l_qs, l_curve, l_pb );
+        l_pb  := multiply_point( l_pb, l_xxx, l_curve );
         l_K := demag( l_pb.x );
         l_tmp := null;
         append_string( l_tmp, V_C );
@@ -2204,8 +2532,12 @@ is
     l_buf raw(32767);
     l_buf2 raw(32767);
     auth_methods tp_name_list;
-    c_INTEGER raw(1) := '02';
-    c_SEQUENCE raw(1) := '30';
+    c_INTEGER    raw(1) := '02';
+    c_BIT_STRING raw(1) := '03';
+    c_OCTECT     raw(1) := '04';
+    c_OID        raw(1) := '06';
+    c_SEQUENCE   raw(1) := '30';
+    type tp_pk_parameters is table of raw(3999) index by pls_integer;
     --
     function write_pk( p_algo varchar2, p_blob raw, p_signature raw )
     return boolean
@@ -2249,6 +2581,151 @@ is
       return l_rv;
     end;
     --
+    function write_rsa_pk( p_pk_parameters tp_pk_parameters )
+    return boolean
+    is
+      l_rv boolean;
+      l_buf3 raw(3999);
+      l_buf5 raw(3999);
+    begin
+      if p_pk_parameters.count = 0
+      then
+        return false;
+      end if;
+      l_buf2 := null;
+      append_string( l_buf2, utl_i18n.string_to_raw( 'ssh-rsa', 'US7ASCII' ) );
+      append_mpint( l_buf2, p_pk_parameters(2) );
+      append_mpint( l_buf2, p_pk_parameters(1) );
+      l_rv := write_pk( 'ssh-rsa', l_buf2, null );
+      if not l_pk_OK
+      then
+        return l_rv;
+      end if;
+      append_string( l_buf3, g_session_id );
+      append_byte( l_buf3, l_buf );
+      l_buf3 := powmod( utl_raw.concat( '0001'
+                                      , utl_raw.copies( 'FF', utl_raw.length( p_pk_parameters(1) ) - 38 - case when utl_raw.substr( p_pk_parameters(1), 1, 1 ) = '00' then 1 else 0 end )
+                                      , '003021300906052B0E03021A05000414' -- fixed ASN.1 value
+                                      , dbms_crypto.hash( l_buf3, HASH_SH1 )
+                                      )
+                      , p_pk_parameters(3)
+                      , p_pk_parameters(1)
+                      );
+      append_string( l_buf5, utl_i18n.string_to_raw( 'ssh-rsa', 'US7ASCII' ) );
+      append_string( l_buf5, l_buf3 );
+      return write_pk( 'ssh-rsa', l_buf2, l_buf5 ); 
+    end;
+    --
+    function write_dsa_pk( p_pk_parameters tp_pk_parameters )
+    return boolean
+    is
+      l_rv boolean;
+      l_k raw(3999);
+      l_r raw(3999);
+      l_s raw(3999);
+      l_mq tp_mag;
+      l_dummy tp_mag;
+      l_idx pls_integer;
+      l_buf3 raw(3999);
+    begin
+      l_buf2 := null;
+      append_string( l_buf2, utl_i18n.string_to_raw( 'ssh-dss', 'US7ASCII' ) );
+      append_mpint( l_buf2, p_pk_parameters(1) );
+      append_mpint( l_buf2, p_pk_parameters(2) );
+      append_mpint( l_buf2, p_pk_parameters(3) );
+      append_mpint( l_buf2, p_pk_parameters(4) );
+      l_rv := write_pk( 'ssh-dss', l_buf2, null );
+      if not l_pk_OK
+      then
+        return l_rv;
+      end if;
+      loop
+        l_k := dbms_crypto.randombytes( utl_raw.length( p_pk_parameters(2) ) );
+        l_idx := utl_raw.compare( l_k, p_pk_parameters(2) );
+        exit when utl_raw.substr( l_k, -3 ) != '000000' and utl_raw.substr( l_k, l_idx, 1 ) < utl_raw.substr( p_pk_parameters(2), l_idx, 1 );
+      end loop;
+      l_mq := mag( p_pk_parameters(2) );
+      l_r := demag( xmod( mag( powmod( p_pk_parameters(3), l_k, p_pk_parameters(1) ) ), l_mq ) );
+      append_string( l_buf3, g_session_id );
+      append_byte( l_buf3, l_buf );
+      l_dummy := mag( dbms_crypto.hash( l_buf3, HASH_SH1 ) );
+      l_dummy := xmod( radd( l_dummy, xmod( rmul( mag( p_pk_parameters(5) ), mag( l_r ) ), l_mq ) ), l_mq );
+      l_dummy := mulmod( l_dummy, powmod( mag( l_k ), nsub( l_mq, 2 ), l_mq ), l_mq );
+      l_s := demag( l_dummy );
+      l_s := utl_raw.overlay( l_s, utl_raw.copies( '00', 20 ), 21 - utl_raw.length( l_s ) );
+      l_r := utl_raw.overlay( l_r, utl_raw.copies( '00', 20 ), 21 - utl_raw.length( l_r ) );
+      l_buf3 := null;
+      append_string( l_buf3, utl_i18n.string_to_raw( 'ssh-dss', 'US7ASCII' ) );
+      append_string( l_buf3, utl_raw.concat( l_r, l_s ) );
+      return write_pk( 'ssh-dss', l_buf2, l_buf3 ); 
+    end;
+    --
+    function write_ec_pk( p_pk_parameters tp_pk_parameters )
+    return boolean
+    is
+      l_rv boolean;
+      l_algo raw(100);
+      l_buf3 raw(3999);
+      l_buf5 raw(3999);
+      l_r tp_mag;
+      l_s tp_mag;
+      l_inv tp_mag;
+      l_xxx tp_mag;
+      l_pb tp_ec_point;
+      l_curve tp_ec_curve;
+      l_hash_type pls_integer;
+    begin
+      if p_pk_parameters.count = 0
+      then
+        return false;
+      end if;
+      l_buf2 := null;
+      l_algo := utl_raw.concat( '65636473612D736861322D', p_pk_parameters(1) ); -- ecdsa-sha2-
+      append_string( l_buf2, l_algo );
+      append_string( l_buf2, p_pk_parameters(1) );
+      append_string( l_buf2, p_pk_parameters(2) );
+      l_rv := write_pk( utl_i18n.raw_to_char( l_algo, 'US7ASCII' ), l_buf2, null );
+      if not l_pk_OK
+      then
+        return false;
+      end if;
+      case p_pk_parameters(1)
+        when hextoraw( '6E69737470323536' ) -- nistp256
+        then
+          l_hash_type := HASH_SH256;
+        when hextoraw( '6E69737470333834' ) -- nistp384
+        then
+          l_hash_type := HASH_SH384;
+        when hextoraw( '6E69737470353231' ) -- nistp521
+        then
+          l_hash_type := HASH_SH512;
+        else
+          return false;
+      end case;
+      get_named_curve( utl_raw.cast_to_varchar2( p_pk_parameters(1) ), l_curve );
+      append_string( l_buf3, g_session_id );
+      append_byte( l_buf3, l_buf );
+      l_xxx := mag( dbms_crypto.randombytes( 4 ) );
+      l_pb  := multiply_point( l_curve.generator, l_xxx, l_curve );
+      l_r := xmod( l_pb.x, l_curve.group_order );
+      l_inv := powmod( l_xxx, nsub( l_curve.group_order, 2 ), l_curve.group_order );
+      l_s := mulmod( radd( mag( dbms_crypto.hash( l_buf3, l_hash_type ) )
+                         , mulmod( mag( p_pk_parameters(3) )
+                                 , l_r
+                                 , l_curve.group_order
+                                 )
+                         )
+                   , l_inv
+                   , l_curve.group_order
+                   );
+      l_buf3 := null;
+      append_string( l_buf3, demag( l_r ) );
+      append_string( l_buf3, demag( l_s ) );
+      append_string( l_buf5, l_algo );
+      append_string( l_buf5, l_buf3 );
+      return write_pk( utl_i18n.raw_to_char( l_algo, 'US7ASCII' ), l_buf2, l_buf5 );
+    end;
+    --
     function get_len( p_key raw, p_ind in out pls_integer )
     return pls_integer
     is
@@ -2269,85 +2746,114 @@ is
       return l_len;
     end;
     --
-    function get_integer( p_key raw, p_ind in out pls_integer, p_msg varchar2 := '' )
-    return raw
+    procedure check_starting_sequence( p_key raw, p_ind in out pls_integer )
     is
       l_len pls_integer;
     begin
-      if utl_raw.substr( p_key, p_ind, 1 ) != c_INTEGER
+      p_ind := 1;
+      if utl_raw.substr( p_key, p_ind, 1 ) != c_SEQUENCE
       then
-        if p_msg is not null
-        then
-          info_msg( p_msg );
-        end if;
+        info_msg( 'Does not start with SEQUENCE' ); 
         raise value_error;
+      end if;
+      l_len := get_len( p_key, p_ind );
+    end;
+    --
+    function get_bytes( p_type raw, p_key raw, p_ind in out pls_integer, p_msg varchar2 := '', p_skip_enclosing_context boolean := true )
+    return raw
+    is
+      l_first raw(1);
+      l_len pls_integer;
+    begin
+      l_first := utl_raw.substr( p_key, p_ind, 1 );
+      if l_first != p_type
+      then
+        if p_skip_enclosing_context and utl_raw.bit_and( l_first, 'C0' ) = '80'
+        then
+          l_len := get_len( p_key, p_ind );
+          return get_bytes( p_type, p_key, p_ind, p_msg, p_skip_enclosing_context );
+        else
+          if p_msg is not null
+          then
+            info_msg( p_msg );
+          end if;
+          raise value_error;
+        end if;
       end if;
       l_len := get_len( p_key, p_ind );
       p_ind := p_ind + l_len;
       return utl_raw.substr( p_key, p_ind - l_len, l_len );
     end;
     --
+    function get_integer( p_key raw, p_ind in out pls_integer, p_msg varchar2 := '' )
+    return raw
+    is
+    begin
+      return get_bytes( c_INTEGER, p_key, p_ind, p_msg );
+    end;
+    --
+    function get_octect( p_key raw, p_ind in out pls_integer, p_msg varchar2 := '' )
+    return raw
+    is
+    begin
+      return get_bytes( c_OCTECT, p_key, p_ind, p_msg );
+    end;
+    --
+    function get_oid( p_key raw, p_ind in out pls_integer, p_msg varchar2 := '' )
+    return raw
+    is
+    begin
+      return get_bytes( c_OID, p_key, p_ind, p_msg );
+    end;
+    --
+    function get_bit_string( p_key raw, p_ind in out pls_integer, p_msg varchar2 := '' )
+    return raw
+    is
+    begin
+      -- assume always primitive encoding
+      -- skip unused bits value, assume always 0
+      return utl_raw.substr( get_bytes( c_BIT_STRING, p_key, p_ind, p_msg ), 2 );
+    end;
+    --
     function parse_DER_DSA_key
       ( p_key raw
-      , p_p out raw
-      , p_q out raw
-      , p_g out raw
-      , p_x out raw
-      , p_y out raw
+      , p_pk_parameters out tp_pk_parameters
       )
     return boolean
     is
       l_dummy raw(3999);
       l_ind pls_integer;
-      l_len pls_integer;
     begin
-      l_ind := 1;
-      if utl_raw.substr( p_key, l_ind, 1 ) != c_SEQUENCE
-      then
-        info_msg( 'Does not start with SEQUENCE' ); 
-        raise value_error;
-      end if;
-      l_len := get_len( p_key, l_ind );
+      p_pk_parameters.delete;
+      check_starting_sequence( p_key, l_ind );
       l_dummy := get_integer( p_key, l_ind, 'No (dummy) INTEGER 0' );
-      p_p := get_integer( p_key, l_ind, 'No P INTEGER' );
-      p_q := get_integer( p_key, l_ind, 'No Q INTEGER' );
-      p_g := get_integer( p_key, l_ind, 'No G INTEGER' );
-      p_y := get_integer( p_key, l_ind, 'No Y INTEGER' );
-      p_x := get_integer( p_key, l_ind, 'No x INTEGER' );
+      p_pk_parameters(1) := get_integer( p_key, l_ind, 'No P INTEGER' );
+      p_pk_parameters(2) := get_integer( p_key, l_ind, 'No Q INTEGER' );
+      p_pk_parameters(3) := get_integer( p_key, l_ind, 'No G INTEGER' );
+      p_pk_parameters(4) := get_integer( p_key, l_ind, 'No Y INTEGER' );
+      p_pk_parameters(5) := get_integer( p_key, l_ind, 'No x INTEGER' );
       return true;
     exception when value_error
       then
-        p_p := null;
-        p_q := null;
-        p_g := null;
-        p_x := null;
-        p_y := null;
+        p_pk_parameters.delete;
         return false;
     end;
     --
     function parse_DER_RSA_key
       ( p_key raw
-      , p_modulus out raw
-      , p_pub_exp out raw
-      , p_priv_exp out raw
+      , p_pk_parameters out tp_pk_parameters
       )
     return boolean
     is
       l_dummy raw(3999);
       l_ind pls_integer;
-      l_len pls_integer;
     begin
-      l_ind := 1;
-      if utl_raw.substr( p_key, l_ind, 1 ) != c_SEQUENCE
-      then
-        info_msg( 'Does not start with SEQUENCE' ); 
-        raise value_error;
-      end if;
-      l_len := get_len( p_key, l_ind );
+      p_pk_parameters.delete;
+      check_starting_sequence( p_key, l_ind );
       l_dummy := get_integer( p_key, l_ind, 'No version INTEGER' );
-      p_modulus := get_integer( p_key, l_ind, 'No modulus INTEGER' );
-      p_pub_exp := get_integer( p_key, l_ind, 'No publicExponent INTEGER' );
-      p_priv_exp := get_integer( p_key, l_ind, 'No privateExponent INTEGER' );
+      p_pk_parameters(1) := get_integer( p_key, l_ind, 'No modulus INTEGER' );
+      p_pk_parameters(2) := get_integer( p_key, l_ind, 'No publicExponent INTEGER' );
+      p_pk_parameters(3) := get_integer( p_key, l_ind, 'No privateExponent INTEGER' );
       l_dummy := get_integer( p_key, l_ind, 'No prime1 INTEGER' );
       l_dummy := get_integer( p_key, l_ind, 'No prime2 INTEGER' );
       l_dummy := get_integer( p_key, l_ind, 'No exponent1 INTEGER' );
@@ -2356,9 +2862,43 @@ is
       return true;
     exception when value_error
       then
-        p_pub_exp := null;
-        p_priv_exp := null;
-        p_modulus := null;
+        p_pk_parameters.delete;
+        return false;
+    end;
+    --
+    function parse_DER_EC_key
+      ( p_key raw
+      , p_pk_parameters out tp_pk_parameters
+      )
+    return boolean
+    is
+      l_dummy raw(3999);
+      l_ind pls_integer;
+    begin
+      p_pk_parameters.delete;
+      check_starting_sequence( p_key, l_ind );
+      l_dummy := get_integer( p_key, l_ind, 'No version INTEGER' );
+      p_pk_parameters(3) := get_octect( p_key, l_ind, 'No private key OCTECT' );
+      p_pk_parameters(5) := get_oid( p_key, l_ind, 'No EC OID' );
+      p_pk_parameters(2) := get_bit_string( p_key, l_ind, 'No public key BIT STRING' );
+      case p_pk_parameters(5)
+        when '2A8648CE3D030107'
+        then
+          p_pk_parameters(1) := utl_raw.cast_to_raw( 'nistp256' );
+        when '2B81040022'
+        then
+          p_pk_parameters(1) := utl_raw.cast_to_raw( 'nistp384' );
+        when '2B81040023'
+        then
+          p_pk_parameters(1) := utl_raw.cast_to_raw( 'nistp521' );
+        else
+          error_msg( 'Not implemented OID ' || p_pk_parameters(5) );
+          raise value_error;
+      end case;
+      return true;
+    exception when value_error
+      then
+        p_pk_parameters.delete;
         return false;
     end;
     --
@@ -2424,15 +2964,17 @@ is
         l_rv := utl_encode.base64_decode( utl_raw.cast_to_raw( l_key ) );
       end if;
       return l_rv;
+    exception
+      when others then
+        error_msg( 'decrypt_private_key: ' || sqlerrm );
+        return '000102';
     end;
     --
     function parse_RSA_private_key( p_key varchar2, p_pw raw )
     return boolean
     is
       l_rv boolean;
-      l_modulus  raw(3999);
-      l_pub_exp  raw(3999);
-      l_priv_exp raw(3999);
+      l_pk_parameters tp_pk_parameters;
     begin
       if (  substr( p_key, 1, 21 ) != 'BEGIN RSA PRIVATE KEY'
          or substr( p_key, -19 ) != 'END RSA PRIVATE KEY'
@@ -2440,36 +2982,10 @@ is
       then
         return false;
       end if;
-      l_rv := parse_DER_RSA_key(decrypt_private_key( p_key, p_pw ), l_modulus, l_pub_exp, l_priv_exp );
+      l_rv := parse_DER_RSA_key(decrypt_private_key( p_key, p_pw ), l_pk_parameters );
       if l_rv
-      then 
-        l_buf2 := null;
-        append_string( l_buf2, utl_i18n.string_to_raw( 'ssh-rsa', 'US7ASCII' ) );
-        append_mpint( l_buf2, l_pub_exp );
-        append_mpint( l_buf2, l_modulus );
-        l_rv := write_pk( 'ssh-rsa', l_buf2, null );
-        if not l_pk_OK
-        then
-          return l_rv;
-        end if;
-        declare
-          l_buf3 raw(3999);
-          l_buf5 raw(3999);
-        begin
-          append_string( l_buf3, g_session_id );
-          append_byte( l_buf3, l_buf );
-          l_buf3 := powmod( utl_raw.concat( '0001'
-                                          , utl_raw.copies( 'FF', utl_raw.length( l_modulus ) - 38 - case when utl_raw.substr( l_modulus, 1, 1 ) = '00' then 1 else 0 end )
-                                          , '003021300906052B0E03021A05000414' -- fixed ASN.1 value
-                                          , dbms_crypto.hash( l_buf3, HASH_SH1 )
-                                          )
-                          , l_priv_exp
-                          , l_modulus
-                          );
-          append_string( l_buf5, utl_i18n.string_to_raw( 'ssh-rsa', 'US7ASCII' ) );
-          append_string( l_buf5, l_buf3 );
-          l_rv := write_pk( 'ssh-rsa', l_buf2, l_buf5 ); 
-        end;
+      then
+        l_rv := write_rsa_pk( l_pk_parameters );
       end if;
       return l_rv; 
     end;
@@ -2478,11 +2994,7 @@ is
     return boolean
     is
       l_rv boolean;
-      l_p raw(3999);
-      l_q raw(3999);
-      l_g raw(3999);
-      l_x raw(3999);
-      l_y raw(3999);
+      l_pk_parameters tp_pk_parameters;
     begin
       if (  substr( p_key, 1, 21 ) != 'BEGIN DSA PRIVATE KEY'
          or substr( p_key, -19 ) != 'END DSA PRIVATE KEY'
@@ -2490,49 +3002,199 @@ is
       then
         return false;
       end if;
-      l_rv := parse_DER_DSA_key(decrypt_private_key( p_key, p_pw ), l_p, l_q, l_g, l_x, l_y );
+      l_rv := parse_DER_DSA_key(decrypt_private_key( p_key, p_pw ), l_pk_parameters );
       if l_rv
       then
-        l_buf2 := null;
-        append_string( l_buf2, utl_i18n.string_to_raw( 'ssh-dss', 'US7ASCII' ) );
-        append_mpint( l_buf2, l_p );
-        append_mpint( l_buf2, l_q );
-        append_mpint( l_buf2, l_g );
-        append_mpint( l_buf2, l_y );
-        l_rv := write_pk( 'ssh-dss', l_buf2, null );
-        if not l_pk_OK
+        l_rv := write_dsa_pk( l_pk_parameters );
+      end if;
+      return l_rv; 
+    end;
+    --
+    function parse_EC_private_key( p_key varchar2, p_pw raw )
+    return boolean
+    is
+      l_rv boolean;
+      l_pk_parameters tp_pk_parameters;
+    begin
+      if (  substr( p_key, 1, 20 ) != 'BEGIN EC PRIVATE KEY'
+         or substr( p_key, -18 ) != 'END EC PRIVATE KEY'
+         )
+      then
+        return false;
+      end if;
+      l_rv := parse_DER_EC_key(decrypt_private_key( p_key, p_pw ), l_pk_parameters );
+      if l_rv
+      then
+        l_rv := write_ec_pk( l_pk_parameters );
+      end if;
+      return l_rv; 
+    end;
+    --
+    function parse_OPENSSH_private_key( p_key varchar2, p_pw raw )
+    return boolean
+    is
+      l_rv boolean;
+      l_vkey varchar2(32767);
+      l_tmp raw(32767);
+      l_idx number;
+      l_len number;
+      l_ciphername varchar2(32767);
+      l_kdfname varchar2(32767);
+      l_salt raw(100);
+      l_rounds pls_integer;
+      l_pk_bytes raw(32767);
+      l_kdf raw(2048);
+      l_key raw(2048);
+      l_iv  raw(2048);
+      l_iv_ctr number;
+      l_keytype varchar2(32767);
+      l_cnt pls_integer;
+      l_pk_parameters tp_pk_parameters;
+    begin
+      if (  substr( p_key, 1, 25 ) != 'BEGIN OPENSSH PRIVATE KEY'
+         or substr( p_key, -23 ) != 'END OPENSSH PRIVATE KEY'
+         )
+      then
+        return false;
+      end if;
+      -- http://dnaeon.github.io/openssh-private-key-binary-format/
+      debug_msg( 'openssh private key' );
+      l_vkey := substr( p_key, 26, length( p_key ) - 48 );
+      l_vkey := ltrim( l_vkey, '- ' || chr(10) || chr(13) );
+      l_vkey := rtrim( l_vkey, '- ' || chr(10) || chr(13) );
+      if substr( l_vkey, 1, 20 ) != 'b3BlbnNzaC1rZXktdjEA' -- openssh-key-v1
+      then
+        return false;
+      end if;
+      l_tmp := utl_encode.base64_decode( utl_raw.cast_to_raw( l_vkey ) );
+      l_idx := 16;
+      l_len := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+      l_idx := l_idx + 4;
+      if l_len between 1 and 32767
+      then
+        l_ciphername := utl_raw.cast_to_varchar2( utl_raw.substr( l_tmp, l_idx, l_len ) );
+      end if;
+      if l_ciphername is null or l_ciphername not in ( 'none', 'aes256-ctr' )
+      then
+        return false;
+      end if;
+      l_idx := l_idx + l_len;
+      l_len := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+      l_idx := l_idx + 4;
+      if l_len between 1 and 32767
+      then
+        l_kdfname := utl_raw.cast_to_varchar2( utl_raw.substr( l_tmp, l_idx, l_len ) );
+      end if;
+      if l_kdfname is null or l_kdfname not in ( 'none', 'bcrypt' )
+      then
+        return false;
+      end if;
+      l_idx := l_idx + l_len;
+      l_len := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+      l_idx := l_idx + 4;
+      if l_len > 0 -- kdfoptions
+      then
+        l_len := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+        l_idx := l_idx + 4;
+        l_salt := utl_raw.substr( l_tmp, l_idx, l_len );
+        l_idx := l_idx + l_len;
+        l_rounds := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+        l_idx := l_idx + 4;
+      end if;
+      l_len := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+      l_idx := l_idx + 4;          -- # keys
+      l_len := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+      l_idx := l_idx + 4;
+      l_idx := l_idx + l_len;  -- public keys
+      l_len := to_number( utl_raw.substr( l_tmp, l_idx, 4 ), 'xxxxxxxx' );
+      l_idx := l_idx + 4; -- skip length private keys
+      debug_msg( 'kdfname: ' || l_kdfname );
+      debug_msg( 'ciphername: ' || l_ciphername );
+      if l_kdfname = 'bcrypt'
+      then
+        return false;
+      end if;
+      if l_ciphername = 'aes256-ctr'
+      then
+        l_iv_ctr := to_number( l_iv, rpad( '0', 32, 'X' ) );
+        for i in 0 .. l_len / 16 - 1
+        loop
+          l_pk_bytes := utl_raw.concat( l_pk_bytes
+                                      , utl_raw.bit_xor( utl_raw.substr( l_tmp, l_idx + i * 16, 16 )
+                                                       , dbms_crypto.encrypt( substr( to_char( l_iv_ctr, 'FM0XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX' ), -32 )
+                                                                            , dbms_crypto.ENCRYPT_AES + dbms_crypto.CHAIN_CBC + dbms_crypto.PAD_NONE
+                                                                            , l_key
+                                                                            )
+                                                       )
+                                      );
+          l_iv_ctr := l_iv_ctr + 1;
+          if l_iv_ctr > 340282366920938463463374607431768211455
+          then
+            l_iv_ctr := 0;
+          end if;
+        end loop;
+      elsif l_ciphername = 'none'
+      then
+        l_pk_bytes := utl_raw.substr( l_tmp, l_idx );
+      end if;
+      if utl_raw.substr( l_pk_bytes, 1, 4 ) != utl_raw.substr( l_pk_bytes, 5, 4 )
+      then
+        return false;
+      end if;
+      l_idx := 9; -- skip random
+      l_len := to_number( utl_raw.substr( l_pk_bytes, l_idx, 4 ), 'xxxxxxxx' );
+      l_idx := l_idx + 4;
+      if l_len between 1 and 3999
+      then
+         l_keytype := utl_raw.cast_to_varchar2( utl_raw.substr( l_pk_bytes, l_idx, l_len ) );
+      end if;
+      l_idx := l_idx + l_len;
+      debug_msg( 'keytype: ' || l_keytype );
+      if l_keytype = 'ssh-rsa'
+      then
+        l_cnt := 3;
+      elsif l_keytype = 'ssh-dss'
+      then
+        l_cnt := 5;
+      elsif l_keytype in ( 'ecdsa-sha2-nistp256'
+                         , 'ecdsa-sha2-nistp384'
+                         , 'ecdsa-sha2-nistp521'
+                         )
+      then
+        l_cnt := 4;
+      elsif l_keytype in ( 'ssh-ed25519', 'ssh-ed448' )
+      then
+        l_cnt := 2;
+      end if;
+      for i in 1 .. l_cnt
+      loop
+        l_len := to_number( utl_raw.substr( l_pk_bytes, l_idx, 4 ), 'xxxxxxxx' );
+        l_idx := l_idx + 4;
+        if l_len between 1 and 3999
         then
-          return l_rv;
+          l_pk_parameters( i ) := utl_raw.substr( l_pk_bytes, l_idx, l_len );
+        else
+          return false;
         end if;
-        declare
-          l_k raw(3999);
-          l_r raw(3999);
-          l_s raw(3999);
-          l_mq tp_mag;
-          l_dummy tp_mag;
-          l_idx pls_integer;
-          l_buf3 raw(3999);
-        begin
-          loop
-            l_k := dbms_crypto.randombytes( utl_raw.length( l_q ) );
-            l_idx := utl_raw.compare( l_k, l_q );
-            exit when utl_raw.substr( l_k, -3 ) != '000000' and utl_raw.substr( l_k, l_idx, 1 ) < utl_raw.substr( l_q, l_idx, 1 );
-          end loop;
-          l_mq := mag( l_q );
-          l_r := demag( xmod( mag( powmod( l_g, l_k, l_p ) ), l_mq ) );
-          append_string( l_buf3, g_session_id );
-          append_byte( l_buf3, l_buf );
-          l_dummy := mag( dbms_crypto.hash( l_buf3, HASH_SH1 ) );
-          l_dummy := xmod( radd( l_dummy, xmod( rmul( mag( l_x ), mag( l_r ) ), l_mq ) ), l_mq );
-          l_dummy := mulmod( l_dummy, powmod( mag( l_k ), nsub( l_mq, 2 ), l_mq ), l_mq );
-          l_s := demag( l_dummy );
-          l_s := utl_raw.overlay( l_s, utl_raw.copies( '00', 20 ), 21 - utl_raw.length( l_s ) );
-          l_r := utl_raw.overlay( l_r, utl_raw.copies( '00', 20 ), 21 - utl_raw.length( l_r ) );
-          l_buf3 := null;
-          append_string( l_buf3, utl_i18n.string_to_raw( 'ssh-dss', 'US7ASCII' ) );
-          append_string( l_buf3, utl_raw.concat( l_r, l_s ) );
-          l_rv := write_pk( 'ssh-dss', l_buf2, l_buf3 ); 
-        end;
+        l_idx := l_idx + l_len;
+      end loop;
+      if l_keytype = 'ssh-rsa'
+      then
+        l_rv := write_rsa_pk( l_pk_parameters );     
+      elsif l_keytype in ( 'ecdsa-sha2-nistp256'
+                         , 'ecdsa-sha2-nistp384'
+                         , 'ecdsa-sha2-nistp521'
+                         )
+      then
+        l_rv := write_ec_pk( l_pk_parameters );     
+      elsif l_keytype in ( 'ssh-ed25519', 'ssh-ed448' )
+      then
+        l_rv := false;
+      elsif l_keytype = 'ssh-dss'
+      then
+        l_rv := write_dsa_pk( l_pk_parameters );     
+      else
+        l_rv := false;
       end if;
       return l_rv; 
     end;
@@ -2551,6 +3213,12 @@ is
       elsif instr( substr( l_key, 1, 50 ), 'RSA' ) > 0
       then
         l_rv := parse_RSA_private_key( l_key, utl_raw.cast_to_raw( p_passphrase ) );
+      elsif instr( substr( l_key, 1, 50 ), 'OPENSSH PRIVATE' ) > 0
+      then
+        l_rv := parse_OPENSSH_private_key( l_key, utl_raw.cast_to_raw( p_passphrase ) );
+      elsif instr( substr( l_key, 1, 50 ), ' EC ' ) > 0
+      then
+        l_rv := parse_EC_private_key( l_key, utl_raw.cast_to_raw( p_passphrase ) );
       else
         l_rv := false;
       end if;
@@ -2564,12 +3232,27 @@ is
     write_packet( l_buf );
     read_until( l_buf, SSH_MSG_SERVICE_ACCEPT );
     info_msg( 'ssh-userauth accepted' );
-    -- first try publickey
-    if p_priv_key is not null and parse_private_key( p_priv_key, p_passphrase )
+    l_buf := SSH_MSG_USERAUTH_REQUEST;
+    append_string( l_buf, utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( 'ssh-connection', 'US7ASCII' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( 'none', 'US7ASCII' ) );
+    write_packet( l_buf );
+    read_until( l_buf, SSH_MSG_USERAUTH_SUCCESS, SSH_MSG_USERAUTH_FAILURE );
+    case utl_raw.substr( l_buf, 1, 1 )
+      when SSH_MSG_USERAUTH_SUCCESS
+      then
+        info_msg( 'can connect with method none!' );
+        l_rv := true;
+      when SSH_MSG_USERAUTH_FAILURE
+      then
+        l_idx := 2;
+        auth_methods := read_name_list( l_idx, l_buf );
+        show_name_list( auth_methods );
+    end case;
+    if l_rv
     then
       return true;
     end if;
-    -- try password
     l_buf := SSH_MSG_USERAUTH_REQUEST;
     append_string( l_buf, utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) );
     append_string( l_buf, utl_i18n.string_to_raw( 'ssh-connection', 'US7ASCII' ) );
@@ -2592,25 +3275,11 @@ is
     then
       return true;
     end if;
-    -- probably won't work, but doesn't hurt to try
-    l_buf := SSH_MSG_USERAUTH_REQUEST;
-    append_string( l_buf, utl_i18n.string_to_raw( p_user, 'AL32UTF8' ) );
-    append_string( l_buf, utl_i18n.string_to_raw( 'ssh-connection', 'US7ASCII' ) );
-    append_string( l_buf, utl_i18n.string_to_raw( 'none', 'US7ASCII' ) );
-    write_packet( l_buf );
-    read_until( l_buf, SSH_MSG_USERAUTH_SUCCESS, SSH_MSG_USERAUTH_FAILURE );
-    case utl_raw.substr( l_buf, 1, 1 )
-      when SSH_MSG_USERAUTH_SUCCESS
-      then
-        info_msg( 'can connect with method none!' );
-        l_rv := true;
-      when SSH_MSG_USERAUTH_FAILURE
-      then
-        l_idx := 2;
-        auth_methods := read_name_list( l_idx, l_buf );
-    --    show_name_list( auth_methods );
-    end case;
-    return l_rv;
+    if p_priv_key is null
+    then
+      return false;
+    end if;
+    return parse_private_key( p_priv_key , p_passphrase );
   end;
   --
   procedure write_fxp_message( p_type raw, p_payload raw )
