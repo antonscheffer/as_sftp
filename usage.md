@@ -48,4 +48,4 @@ end;</code></pre>
 
 
 # Login using a private key is partly supported, i.e. only using a RSA and DSA/DSS private key.
-As soon as I think that this package is used (lots of stars, lots of bug issues, lots of feature requests, lots of donations) I will extend that with at ECDSA private keys.
+As soon as I think that this package is used (lots of stars, lots of bug issues, lots of feature requests, lots of donations) I will extend that with ECDSA private keys.
