@@ -1944,7 +1944,7 @@ is
         l_w := powmod( l_dss_s, demag( nsub( mag( l_q ), 2 ) ), l_q );
         l_u1 := demag( xmod( rmul( mag( dbms_crypto.hash( l_H, HASH_SH1 ) ), mag( l_w ) ), mag( l_q ) ) );
         l_u2 := demag( xmod( rmul( mag( l_dss_r ), mag( l_w ) ), mag( l_q ) ) );
-        l_v := demag( xmod( xmod( rmul( mag( powmod( l_g, l_u1, l_p ) ), mag( powmod( l_y, l_u2, l_p ) ) ), mag( l_p ) ), mag( l_q ) ) );
+        l_v := lpad( demag( xmod( xmod( rmul( mag( powmod( l_g, l_u1, l_p ) ), mag( powmod( l_y, l_u2, l_p ) ) ), mag( l_p ) ), mag( l_q ) ) ), 40, '0' );
         if l_v != l_dss_r
         then
           raise_application_error( -20012, 'ssh-dss not OK' );
