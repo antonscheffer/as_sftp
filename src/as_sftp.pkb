@@ -78,7 +78,7 @@ is
   g_iv_cypher_s2c_ctr number;
   --
   -- kex globals
-  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.08', 'US7ASCII' );
+  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.082', 'US7ASCII' );
   V_S raw(512);
   g_session_id raw(100);
   --
@@ -1897,12 +1897,13 @@ is
       l_g raw(32767);
       l_q raw(32767);
       l_y raw(32767);
-      l_dss_r raw(20);
-      l_dss_s raw(20);
+      l_dss_r raw(200);
+      l_dss_s raw(200);
       l_w raw(32767);
       l_u1 raw(32767);
       l_u2 raw(32767);
       l_v raw(32767);
+      l_dss_len pls_integer;
       --
       l_rsa_e raw(32767);
       l_rsa_n raw(32767);
@@ -1939,14 +1940,24 @@ is
           raise_application_error( -20011, 'ssh-dss not OK' );
         end if;
         get_string( l_idx, p_signature, l_tmp );
-        l_dss_r := utl_raw.substr( l_tmp, 1, 20 );
-        l_dss_s := utl_raw.substr( l_tmp, 21, 20 );
+        l_dss_len := utl_raw.length( l_tmp ) / 2;
+        l_dss_r := utl_raw.substr( l_tmp, 1, l_dss_len );
+        l_dss_s := utl_raw.substr( l_tmp, l_dss_len + 1 );
         l_w := powmod( l_dss_s, demag( nsub( mag( l_q ), 2 ) ), l_q );
         l_u1 := demag( xmod( rmul( mag( dbms_crypto.hash( l_H, HASH_SH1 ) ), mag( l_w ) ), mag( l_q ) ) );
         l_u2 := demag( xmod( rmul( mag( l_dss_r ), mag( l_w ) ), mag( l_q ) ) );
-        l_v := lpad( demag( xmod( xmod( rmul( mag( powmod( l_g, l_u1, l_p ) ), mag( powmod( l_y, l_u2, l_p ) ) ), mag( l_p ) ), mag( l_q ) ) ), 40, '0' );
+        l_v := lpad( demag( xmod( xmod( rmul( mag( powmod( l_g, l_u1, l_p ) ), mag( powmod( l_y, l_u2, l_p ) ) ), mag( l_p ) ), mag( l_q ) ) ), l_dss_len * 2, '0' );
         if l_v != l_dss_r
         then
+          error_msg( p_host_key );
+          error_msg( p_signature );
+          error_msg( l_H );
+          error_msg( l_dss_r );
+          error_msg( l_v );
+          error_msg( l_dss_s );
+          error_msg( l_w );
+          error_msg( l_u1 );
+          error_msg( l_u2 );        
           raise_application_error( -20012, 'ssh-dss not OK' );
         end if;
       elsif l_tmp in ( hextoraw( '7373682D727361' ) -- ssh-rsa
@@ -1979,6 +1990,15 @@ is
         l_tmp := powmod( l_rsa_s, l_rsa_e, l_rsa_n );
         if dbms_crypto.hash( l_H, l_hash_type ) != utl_raw.substr( l_tmp, - l_hash_len )
         then
+          error_msg( p_host_key );
+          error_msg( p_signature );
+          error_msg( l_H );
+          error_msg( l_rsa_s );
+          error_msg( l_rsa_e );
+          error_msg( l_rsa_n );
+          error_msg( l_hash_len );
+          error_msg( l_tmp );
+          error_msg( dbms_crypto.hash( l_H, l_hash_type ) );
           raise_application_error( -20015, 'ssh-rsa not OK' );
         end if;
       elsif l_tmp in ( hextoraw( '65636473612D736861322D6E69737470323536' ) -- ecdsa-sha2-nistp256
