@@ -78,7 +78,7 @@ is
   g_iv_cypher_s2c_ctr number;
   --
   -- kex globals
-  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.082', 'US7ASCII' );
+  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.084', 'US7ASCII' );
   V_S raw(512);
   g_session_id raw(100);
   --
@@ -2494,7 +2494,7 @@ is
     g_iv_cypher_s2c := derive_key( '42' -- B
                                  , case when g_encr_algo_s in ( '3des-cbc', '3des-ctr' ) then 8 else 16 end
                                  );
-    g_iv_cypher_s2c_ctr := to_number( g_iv_cypher_s2c, rpad( '0', 32, 'X' ) );
+    g_iv_cypher_s2c_ctr := to_number( g_iv_cypher_s2c, rpad( '0', length( g_iv_cypher_s2c ), 'X' ) );
     g_key_cypher_c2s := derive_key( '43' -- C
                                  , case g_encr_algo_c
                                      when '3des-cbc' then 24
