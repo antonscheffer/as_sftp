@@ -54,6 +54,27 @@ is
   function read_dir( i_path varchar2 )
   return tp_dir_listing;
 
+  function path_exists( i_path varchar2, i_check_for_dir boolean := null )
+  return boolean;
+
+  function file_exists( i_path varchar2 )
+  return boolean;
+
+  function dir_exists( i_path varchar2, i_check_for_dir boolean := null )
+  return boolean;
+
+  function remove_file( i_filename varchar2 )
+  return boolean;
+
+  function remove_directory( i_path varchar2 )
+  return boolean;
+
+  function create_directory( i_path varchar2 )
+  return boolean;
+
+  function rename_path( i_old_path varchar2, i_new_path varchar2, i_overwrite boolean := true )
+  return boolean;
+
   function get_file( i_path varchar2, i_file in out nocopy blob )
   return boolean;
 
