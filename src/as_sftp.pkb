@@ -78,7 +78,7 @@ is
   g_iv_cypher_s2c_ctr number;
   --
   -- kex globals
-  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.084', 'US7ASCII' );
+  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.086', 'US7ASCII' );
   V_S raw(512);
   g_session_id raw(100);
   --
@@ -171,15 +171,26 @@ is
   SSH_FXF_TRUNC            constant number := 16;
   SSH_FXF_EXCL             constant number := 32;
   --
-  SSH_FX_OK                constant number := 0;
-  SSH_FX_EOF               constant number := 1;
-  SSH_FX_NO_SUCH_FILE      constant number := 2;
-  SSH_FX_PERMISSION_DENIED constant number := 3;
-  SSH_FX_FAILURE           constant number := 4;
-  SSH_FX_BAD_MESSAGE       constant number := 5;
-  SSH_FX_NO_CONNECTION     constant number := 6;
-  SSH_FX_CONNECTION_LOST   constant number := 7;
-  SSH_FX_OP_UNSUPPORTED    constant number := 8;
+  SSH_FX_OK                  constant number := 0;
+  SSH_FX_EOF                 constant number := 1;
+  SSH_FX_NO_SUCH_FILE        constant number := 2;
+  SSH_FX_PERMISSION_DENIED   constant number := 3;
+  SSH_FX_FAILURE             constant number := 4;
+  SSH_FX_BAD_MESSAGE         constant number := 5;
+  SSH_FX_NO_CONNECTION       constant number := 6;
+  SSH_FX_CONNECTION_LOST     constant number := 7;
+  SSH_FX_OP_UNSUPPORTED      constant number := 8;
+  SSH_FX_INVALID_HANDLE      constant number := 9;
+  SSH_FX_NO_SUCH_PATH        constant number := 10;
+  SSH_FX_FILE_ALREADY_EXISTS constant number := 11;
+  --
+  SSH_FILEXFER_ATTR_SIZE         number := 1;
+  SSH_FILEXFER_ATTR_UIDGID       number := 2;
+  SSH_FILEXFER_ATTR_PERMISSIONS  number := 4;
+  SSH_FILEXFER_ATTR_ACMODTIME    number := 8;
+  SSH_FILEXFER_ATTR_EXTENDED     number := 2147483648;
+  --
+  S_IFDIR constant number := 16384;
   --
   procedure log( p_msg in varchar2 )
   is
@@ -1342,7 +1353,7 @@ is
         g_iv_cypher_c2s := to_char( nvl( to_number( nullif( g_iv_cypher_c2s
                                                           , rpad( 'F', 32, 'F' )
                                                           )
-                                                  , rpad( '0', 32, 'X' )
+                                                  , rpad( 'X', 32, 'X' )
                                                   ) + 1
                                        , 0
                                        )
@@ -1484,7 +1495,7 @@ is
     then
       p_dest := utl_raw.substr( p_buf, p_idx + 4, l_len );
     else
-     p_dest := null;
+      p_dest := null;
     end if;
     p_idx := p_idx + 4 + l_len;
   end;
@@ -2494,7 +2505,7 @@ is
     g_iv_cypher_s2c := derive_key( '42' -- B
                                  , case when g_encr_algo_s in ( '3des-cbc', '3des-ctr' ) then 8 else 16 end
                                  );
-    g_iv_cypher_s2c_ctr := to_number( g_iv_cypher_s2c, rpad( '0', length( g_iv_cypher_s2c ), 'X' ) );
+    g_iv_cypher_s2c_ctr := to_number( g_iv_cypher_s2c, rpad( 'X', length( g_iv_cypher_s2c ), 'X' ) );
     g_key_cypher_c2s := derive_key( '43' -- C
                                  , case g_encr_algo_c
                                      when '3des-cbc' then 24
@@ -3136,7 +3147,7 @@ is
       end if;
       if l_ciphername = 'aes256-ctr'
       then
-        l_iv_ctr := to_number( l_iv, rpad( '0', 32, 'X' ) );
+        l_iv_ctr := to_number( l_iv, rpad( 'X', 32, 'X' ) );
         for i in 0 .. l_len / 16 - 1
         loop
           l_pk_bytes := utl_raw.concat( l_pk_bytes
@@ -3747,13 +3758,6 @@ is
     l_buf2 raw(32767);
     l_dir_line tp_dir_line;
     l_dir_listing tp_dir_listing;
---
-    SSH_FILEXFER_ATTR_SIZE         number := 1;
-    SSH_FILEXFER_ATTR_UIDGID       number := 2;
-    SSH_FILEXFER_ATTR_PERMISSIONS  number := 4;
-    SSH_FILEXFER_ATTR_ACMODTIME    number := 8;
-    SSH_FILEXFER_ATTR_EXTENDED     number := 2147483648;
---
   begin
     l_buf := null;
     l_fxp_id := 254;
@@ -3800,7 +3804,6 @@ is
             l_dir_line.file_name := utl_raw.cast_to_varchar2( l_buf2 );
             get_string( l_idx, l_buf, l_buf2 );
             l_dir_line.long_name := utl_raw.cast_to_varchar2( l_buf2 );
-            l_dir_line.is_directory := utl_raw.substr( l_buf2, 1, 1 ) = '64'; -- d
             get_int32( l_idx, l_buf, l_flags );
             if bitand( l_flags, SSH_FILEXFER_ATTR_SIZE ) = SSH_FILEXFER_ATTR_SIZE
             then
@@ -3814,6 +3817,9 @@ is
             if bitand( l_flags, SSH_FILEXFER_ATTR_PERMISSIONS ) = SSH_FILEXFER_ATTR_PERMISSIONS
             then
               get_int32( l_idx, l_buf, l_dir_line.perm );
+              l_dir_line.is_directory := bitand( l_dir_line.perm, S_IFDIR ) = S_IFDIR;
+            else
+              l_dir_line.is_directory := utl_raw.substr( l_buf2, 1, 1 ) = '64'; -- d
             end if;
             if bitand( l_flags, SSH_FILEXFER_ATTR_ACMODTIME ) = SSH_FILEXFER_ATTR_ACMODTIME
             then
@@ -3851,9 +3857,247 @@ is
     return l_dir_listing;
   end;
   --
+  function path_exists( i_path varchar2, i_check_for_dir boolean := null )
+  return boolean
+  is
+    l_dummy number;
+    l_fxp_id number;
+    l_idx pls_integer;
+    l_buf raw(32767);
+    l_buf2 raw(32767);
+    l_flags number;
+    l_is_dir boolean;
+    l_rv boolean;
+  begin
+    l_rv := false;
+    l_buf := null;
+    l_fxp_id := 241;
+    append_int32( l_buf, l_fxp_id );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_int32( l_buf, 0 );
+    write_fxp_message( SSH_FXP_LSTAT, l_buf );
+    loop
+      read_fxp_message( l_buf );
+      if utl_raw.substr( l_buf, 1, 1 ) = SSH_FXP_ATTRS
+      then
+        l_idx := 2;
+        get_int32( l_idx, l_buf, l_flags );
+        get_int32( l_idx, l_buf, l_flags );
+        if bitand( l_flags, SSH_FILEXFER_ATTR_SIZE ) = SSH_FILEXFER_ATTR_SIZE
+        then
+          get_int64( l_idx, l_buf, l_dummy );
+        end if;
+        if bitand( l_flags, SSH_FILEXFER_ATTR_UIDGID ) = SSH_FILEXFER_ATTR_UIDGID
+        then
+          get_int32( l_idx, l_buf, l_dummy );
+          get_int32( l_idx, l_buf, l_dummy );
+        end if;
+        if bitand( l_flags, SSH_FILEXFER_ATTR_PERMISSIONS ) = SSH_FILEXFER_ATTR_PERMISSIONS
+        then
+          get_int32( l_idx, l_buf, l_dummy );
+          l_is_dir := bitand( l_dummy, S_IFDIR ) = S_IFDIR;
+        else
+          l_is_dir := utl_raw.substr( l_buf2, 1, 1 ) = '64'; -- d
+        end if;
+        l_rv := i_check_for_dir is null or l_is_dir = i_check_for_dir;
+        if l_is_dir
+        then
+          debug_msg( 'path_exists: found directory' );
+        else
+          debug_msg( 'path_exists: found file' );
+        end if;
+        exit;
+      elsif utl_raw.substr( l_buf, 1, 1 ) = SSH_FXP_STATUS
+      then
+        debug_msg( 'path_exists: not found' );
+        l_idx := 2;
+        get_int32( l_idx, l_buf, l_dummy ); -- id
+        get_int32( l_idx, l_buf, l_dummy ); -- reason code
+        get_string( l_idx, l_buf, l_buf2 );
+        debug_msg( utl_i18n.raw_to_char( l_buf2, 'AL32UTF8' ) );
+        exit;
+      end if;
+    end loop;
+    return l_rv;
+  end;
+  --
+  function file_exists( i_path varchar2 )
+  return boolean
+  is
+  begin
+    return path_exists( i_path, false );
+  end;
+  --
+  function dir_exists( i_path varchar2, i_check_for_dir boolean := null )
+  return boolean
+  is
+  begin
+    return path_exists( i_path, true );
+  end;
+  --
+  function remove_file( i_filename varchar2 )
+  return boolean
+  is
+    l_dummy number;
+    l_fxp_id number;
+    l_idx pls_integer;
+    l_buf raw(32767);
+    l_buf2 raw(32767);
+    l_rv boolean;
+  begin
+    l_rv := false;
+    l_buf := null;
+    l_fxp_id := 244;
+    append_int32( l_buf, l_fxp_id );
+    append_string( l_buf, utl_i18n.string_to_raw( i_filename, 'AL32UTF8' ) );
+    write_fxp_message( SSH_FXP_REMOVE, l_buf );
+    loop
+      read_fxp_message( l_buf );
+      if utl_raw.substr( l_buf, 1, 1 ) = SSH_FXP_STATUS
+      then
+        l_idx := 2;
+        get_int32( l_idx, l_buf, l_dummy ); -- id
+        get_int32( l_idx, l_buf, l_dummy ); -- reason code
+        if l_dummy = SSH_FX_OK
+        then
+          l_rv := true;
+          debug_msg( 'file removed' );
+        else
+          get_string( l_idx, l_buf, l_buf2 );
+          debug_msg( 'file not removed. ' || utl_i18n.raw_to_char( l_buf2, 'AL32UTF8' ) );
+        end if;
+        exit;
+      end if;
+    end loop;
+    return l_rv;
+  end;
+  --
+  function remove_directory( i_path varchar2 )
+  return boolean
+  is
+    l_dummy number;
+    l_fxp_id number;
+    l_idx pls_integer;
+    l_buf raw(32767);
+    l_buf2 raw(32767);
+    l_rv boolean;
+  begin
+    l_rv := false;
+    l_buf := null;
+    l_fxp_id := 246;
+    append_int32( l_buf, l_fxp_id );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    write_fxp_message( SSH_FXP_RMDIR, l_buf );
+    loop
+      read_fxp_message( l_buf );
+      if utl_raw.substr( l_buf, 1, 1 ) = SSH_FXP_STATUS
+      then
+        l_idx := 2;
+        get_int32( l_idx, l_buf, l_dummy ); -- id
+        get_int32( l_idx, l_buf, l_dummy ); -- reason code
+        if l_dummy = SSH_FX_OK
+        then
+          l_rv := true;
+          debug_msg( 'directory removed' );
+        else
+          get_string( l_idx, l_buf, l_buf2 );
+          debug_msg( 'directory not removed. ' || utl_i18n.raw_to_char( l_buf2, 'AL32UTF8' ) );
+        end if;
+        exit;
+      end if;
+    end loop;
+    return l_rv;
+  end;
+  --
+  function create_directory( i_path varchar2 )
+  return boolean
+  is
+    l_dummy number;
+    l_fxp_id number;
+    l_idx pls_integer;
+    l_buf raw(32767);
+    l_buf2 raw(32767);
+    l_rv boolean;
+  begin
+    l_rv := false;
+    l_buf := null;
+    l_fxp_id := 238;
+    append_int32( l_buf, l_fxp_id );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_int32( l_buf, 0 );
+    write_fxp_message( SSH_FXP_MKDIR, l_buf );
+    loop
+      read_fxp_message( l_buf );
+      if utl_raw.substr( l_buf, 1, 1 ) = SSH_FXP_STATUS
+      then
+        l_idx := 2;
+        get_int32( l_idx, l_buf, l_dummy ); -- id
+        get_int32( l_idx, l_buf, l_dummy ); -- reason code
+        if l_dummy = SSH_FX_OK
+        then
+          l_rv := true;
+          debug_msg( 'directory created' );
+        else
+          get_string( l_idx, l_buf, l_buf2 );
+          debug_msg( 'directory not removed. ' || utl_i18n.raw_to_char( l_buf2, 'AL32UTF8' ) );
+        end if;
+        exit;
+      end if;
+    end loop;
+    return l_rv;
+  end;
+  --
+  function rename_path( i_old_path varchar2, i_new_path varchar2, i_overwrite boolean := true )
+  return boolean
+  is
+    l_dummy number;
+    l_fxp_id number;
+    l_idx pls_integer;
+    l_buf raw(32767);
+    l_buf2 raw(32767);
+    l_rv boolean;
+  begin
+    l_rv := false;
+    l_buf := null;
+    l_fxp_id := 248;
+    append_int32( l_buf, l_fxp_id );
+    append_string( l_buf, utl_i18n.string_to_raw( i_old_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_new_path, 'AL32UTF8' ) );
+    write_fxp_message( SSH_FXP_RENAME, l_buf );
+    loop
+      read_fxp_message( l_buf );
+      if utl_raw.substr( l_buf, 1, 1 ) = SSH_FXP_STATUS
+      then
+        l_idx := 2;
+        get_int32( l_idx, l_buf, l_dummy ); -- id
+        get_int32( l_idx, l_buf, l_dummy ); -- reason code
+        if l_dummy = SSH_FX_OK
+        then
+          l_rv := true;
+          debug_msg( 'path renamed' );
+        elsif (   i_overwrite
+              and l_dummy = SSH_FX_FILE_ALREADY_EXISTS
+              and (  remove_file( i_new_path )
+                  or remove_directory( i_new_path )
+                  )
+              )
+        then
+          -- overwrite as attribute is introduced in version 6
+          debug_msg( 'new_path first removed' );
+          l_rv := rename_path( i_old_path, i_new_path );
+        else
+          get_string( l_idx, l_buf, l_buf2 );
+          debug_msg( 'path not renamed. ' || utl_i18n.raw_to_char( l_buf2, 'AL32UTF8' ) );
+        end if;
+        exit;
+      end if;
+    end loop;
+    return l_rv;
+  end;
+  --
   procedure login( i_user varchar2, i_password varchar2 := null, i_priv_key varchar2 := null, i_passphrase varchar2 := null, i_log_level pls_integer := null )
   is
-    l_prev_log_level pls_integer := g_log_level;
+    l_prev_log_level pls_integer := g_log_level;  
   begin
     g_log_level := nvl( i_log_level, g_log_level );
     if do_auth( i_user, i_password, i_priv_key, i_passphrase )
