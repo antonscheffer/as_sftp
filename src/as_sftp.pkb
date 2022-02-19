@@ -1865,11 +1865,13 @@ is
     l_K raw(32767);
     l_H raw(100);
     --
-    cursor c_known_hosts( cp_host varchar2 )
+    cursor c_known_hosts( cp_host varchar2, cp_current_user )
     is
     select fingerprint
     from as_sftp_known_hosts
-    where host = cp_host;
+    where host = cp_host AND current_user = cp_current_user
+    ;
+
     r_known_hosts c_known_hosts%rowtype;
     --
     function derive_key( p_byte raw, p_len pls_integer )
@@ -2465,14 +2467,18 @@ is
        or p_trust
     then
       merge into as_sftp_known_hosts
-      using ( select upper( g_con.remote_host ) p_host from dual ) on ( host = p_host )
+      using ( select upper( g_con.remote_host ) AS p_host 
+                    ,SYS_CONTEXT('USERENV','CURRENT_USER') AS p_current_user
+                from dual 
+      ) 
+      on ( host = p_host and current_user = p_current_user )
       when matched then
         update set fingerprint = l_host_fingerprint
       when not matched then
-        insert( host, fingerprint ) values( p_host, l_host_fingerprint );
+        insert( host, fingerprint, current_user ) values( p_host, l_host_fingerprint, p_current_user );
       commit;
     else
-      open c_known_hosts( upper( g_con.remote_host ) );
+      open c_known_hosts( upper( g_con.remote_host ), SYS_CONTEXT('USERENV','CURRENT_USER'));
       fetch c_known_hosts into r_known_hosts;
       if c_known_hosts%notfound
       then
@@ -4118,6 +4124,97 @@ is
       g_log_level := l_prev_log_level;
       raise;
   end;
+
+    -- this falls apart if the calling procedure is AUTHID CURRENT_USER. Your circus if you set it up that way.
+    FUNCTION get_caller_current_user
+    RETURN VARCHAR2
+    IS
+        v_caller    VARCHAR2(128);
+        v_depth     BINARY_INTEGER := UTL_CALL_STACK.dynamic_depth;
+    BEGIN
+        -- we must be called by another method in this package. We skip the first entry which is this procedure
+        -- we skip the second entry which is the caller in this package.
+        -- The third entry is either another package or procedure, or else an anonymous block. If it is
+        -- a compiled object, we use the owner of that object; otherwise, we use the USER.
+        --
+        -- If v_depth < 3 we deserve to blow up
+        RETURN NVL( UTL_CALL_STACK.owner(3), SYS_CONTEXT('USERENV','SESSION_USER') )
+    END get_caller_current_user
+    ;
+    --
+    -- This is the only method to select the private key when fine grained access control is added to the table
+    -- with as_sftp_keymgt_security package. It is a package private function only called by login()
+    --
+    FUNCTION get_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_current_user VARCHAR2) 
+    RETURN CLOB
+    IS
+        v_clob CLOB;
+    BEGIN
+        SELECT key INTO v_clob
+        FROM as_sftp_private_keys k
+        WHERE host = UPPER(i_host) AND k.id = UPPER(i_user) AND k.current_user = i_current_user
+        ;
+        RETURN v_clob;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            raise_application_error(-20713, 'no record found in table as_sftp_private_keys for host='||i_host||', id='||i_user);
+    END ;
+
+    --
+    -- The method for obtaining the private key and using it to call as_sftp.login
+    --
+    PROCEDURE login(
+         i_user         VARCHAR2
+        ,i_host         VARCHAR2
+        ,i_trust_server BOOLEAN := FALSE
+        ,i_passphrase   VARCHAR2 := NULL
+        ,i_log_level    pls_integer := null
+    )
+    IS
+        v_priv_key VARCHAR2(32767) := get_priv_key(i_host, i_user, get_caller_current_user);
+    BEGIN
+        IF i_trust_server THEN
+            as_sftp.open_connection(i_host => i_host, i_trust_server => TRUE);
+            -- not sure required to close and reopen, but that is how Anton's example works
+            as_sftp.close_connection;
+        END IF;
+        as_sftp.open_connection(i_host => i_host);
+        as_sftp.login(i_log_level => i_log_level, i_user => i_user, i_priv_key => v_priv_key, i_passphrase => i_passphrase);
+    END;
+
+    --
+    -- 3 DML methods for manipulating the key table records
+    --
+    PROCEDURE insert_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB) 
+    IS
+    BEGIN
+        INSERT INTO as_sftp_private_keys(
+                host, id, current_user, key
+        ) VALUES(
+                UPPER(i_host), UPPER(i_user), get_caller_current_user, i_key
+        );
+        COMMIT;
+    END insert_priv_key;
+
+    PROCEDURE update_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB) 
+    IS
+    BEGIN
+        UPDATE as_sftp_private_keys
+            SET key = i_key
+            WHERE host = i_host AND id = i_user AND current_user = get_caller_current_user
+            ;
+        COMMIT;
+    END update_priv_key;
+
+    PROCEDURE delete_priv_key(i_host VARCHAR2, i_user VARCHAR2) 
+    IS
+    BEGIN
+        DELETE FROM as_sftp_private_keys
+            WHERE host = i_host AND id = i_user AND current_user = get_caller_current_user
+            ;
+        COMMIT;
+    END delete_priv_key;
+
   --
   procedure open_connection
     ( p_host varchar2

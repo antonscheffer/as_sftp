@@ -48,6 +48,22 @@ is
 
   procedure login( i_user varchar2, i_password varchar2 := null, i_priv_key varchar2 := null, i_passphrase varchar2 := null, i_log_level pls_integer := null );
 
+    PROCEDURE login(
+         i_user         VARCHAR2
+        ,i_host         VARCHAR2
+        ,i_trust_server BOOLEAN := FALSE
+        ,i_passphrase   VARCHAR2 := NULL
+        ,i_log_level    pls_integer := null
+    );
+    -- When keymgmt_security is activated (fine grained access control)
+    -- These three methods are the only way to manipuate the data in the table as_sftp_private_keys
+    -- other than to truncate it or do the task as sysdba.
+    -- You cannot read the data at all as get_priv_key is a private function that only login() can call.
+    --
+    PROCEDURE insert_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB);
+    PROCEDURE update_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB);
+    PROCEDURE delete_priv_key(i_host VARCHAR2, i_user VARCHAR2);
+
   function pwd
   return varchar2;
 
