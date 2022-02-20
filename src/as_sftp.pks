@@ -115,3 +115,5 @@ is
 
   procedure set_log_level( i_level pls_integer );
 end;
+/
+show errors
