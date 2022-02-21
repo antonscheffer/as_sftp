@@ -258,6 +258,7 @@ is
                 AND UTL_CALL_STACK.concatenate_subprogram(UTL_CALL_STACK.subprogram(i)) LIKE 'AS_SFTP.%' ;
             -- an anonymous block has no owner, so get the session user which is not changed by priv call stack
             v_caller := NVL( UTL_CALL_STACK.owner(i), SYS_CONTEXT('USERENV','SESSION_USER') );
+            EXIT;
         END LOOP;
         RETURN v_caller;
   END get_caller_current_user ;
