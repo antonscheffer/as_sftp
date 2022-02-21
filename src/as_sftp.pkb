@@ -244,6 +244,14 @@ is
         v_caller    VARCHAR2(128);
         v_depth     BINARY_INTEGER := UTL_CALL_STACK.dynamic_depth;
   BEGIN
+$if dbms_db_version.ver_le_10 $then
+    v_caller := '&&compile_schema.';
+$elsif dbms_db_version.ver_le_11 $then
+    -- utl_call_stack only became available in oracle 12.  If you are on older version, stick with
+    -- a single list of private keys, not by calling user.
+    -- Could parse format_call_stack like we used to do, but not worth the effort to support releases prior to 12
+    v_caller := '&&compile_schema.';
+$else
         -- We skip the first entry which is this procedure
         -- we must be called by another method in this package because we are private, 
         -- so we skip the second entry which is the caller in this package.
@@ -252,6 +260,7 @@ is
         -- a compiled object, we use the owner of that object; otherwise, we use the USER.
         --
         -- If v_depth < 3 we deserve to blow up
+        v_depth := UTL_CALL_STACK.dynamic_depth;
         FOR i IN 3..v_depth
         LOOP
             CONTINUE WHEN UTL_CALL_STACK.owner(i) = '&&compile_schema.' 
@@ -260,6 +269,7 @@ is
             v_caller := NVL( UTL_CALL_STACK.owner(i), SYS_CONTEXT('USERENV','SESSION_USER') );
             EXIT;
         END LOOP;
+$end
         RETURN v_caller;
   END get_caller_current_user ;
   --

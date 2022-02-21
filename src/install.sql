@@ -51,16 +51,29 @@ prompt as_sftp.pkb
 
 DECLARE
     l_cnt NUMBER;
+    l_can_compile BOOLEAN;
 BEGIN
     IF '&&compile_keymgmt_security' = 'TRUE' THEN
+$if dbms_db_version.ver_le_10 $then
+        l_can_compile := TRUE;
+$elsif dbms_db_version.ver_le_11 $then
+        l_can_compile := TRUE;
+$else
+        -- dbms version 12 and higher have needed features
         select COUNT(*) INTO l_cnt
         FROM all_procedures
         WHERE object_type = 'PACKAGE' AND object_name = 'DBMS_RLS';
         IF l_cnt > 0 THEN
-            :file_name := 'install_keymgmt_security.sql';
+            l_can_compile := TRUE;
         ELSE
-            :file_name := 'not_installing_keymgmt_security.sql';
+            l_can_compile := FALSE;
         END IF;
+    ELSE
+        l_can_compile := FALSE;
+$end
+    END IF;
+    IF l_can_compile THEN
+        :file_name := 'install_keymgmt_security.sql';
     ELSE
         :file_name := 'not_installing_keymgmt_security.sql';
     END IF;
