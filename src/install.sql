@@ -55,9 +55,9 @@ DECLARE
 BEGIN
     IF '&&compile_keymgmt_security' = 'TRUE' THEN
 $if dbms_db_version.ver_le_10 $then
-        l_can_compile := TRUE;
+        l_can_compile := FALSE;
 $elsif dbms_db_version.ver_le_11 $then
-        l_can_compile := TRUE;
+        l_can_compile := FALSE;
 $else
         -- dbms version 12 and higher have needed features
         select COUNT(*) INTO l_cnt
