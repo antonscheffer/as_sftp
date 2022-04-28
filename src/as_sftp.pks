@@ -48,6 +48,11 @@ is
 
   procedure login( i_user varchar2, i_password varchar2 := null, i_priv_key varchar2 := null, i_passphrase varchar2 := null, i_log_level pls_integer := null );
 
+  procedure login_pk( i_user varchar2, i_path varchar2, i_file varchar2, i_password varchar2 := null, i_log_level pls_integer := null );
+  
+  /* experimental, don't expect to much from this procedure */
+  procedure login_wallet( i_wallet_path varchar2, i_user varchar2, i_wallet_password varchar2 := null, i_wallet_file varchar2 := null, i_log_level pls_integer := null );
+
   function pwd
   return varchar2;
 
