@@ -34,6 +34,7 @@ SELECT :file_name FROM dual;
 define compile_schema=&&do_file
 prompt compiling in schema &&compile_schema
 prompt
+-- we need the value "compile_schema" because it is in literal text inside one of the packages
 
 whenever sqlerror continue
 prompt deploying table as_sftp_private_keys
@@ -44,11 +45,15 @@ prompt deploying table as_sftp_known_hosts
 prompt ok if table create fails because table already exists
 whenever sqlerror exit failure
 --
+-- Now compile the main package for sftp
+--
 prompt as_sftp.pks
 @@as_sftp.pks
 prompt as_sftp.pkb
 @@as_sftp.pkb
-
+--
+-- compile fine grained access control around our key tables if we can
+--
 DECLARE
     l_cnt NUMBER;
     l_can_compile BOOLEAN;
@@ -82,5 +87,4 @@ END;
 SELECT :file_name FROM dual;
 prompt calling &&do_file
 @@&&do_file
-
 
