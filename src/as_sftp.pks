@@ -48,6 +48,9 @@ is
 
   procedure login( i_user varchar2, i_password varchar2 := null, i_priv_key varchar2 := null, i_passphrase varchar2 := null, i_log_level pls_integer := null );
 
+--
+------- fine grained access control key storage ---------------------------
+--
     PROCEDURE login(
          i_user         VARCHAR2
         ,i_host         VARCHAR2
@@ -63,6 +66,14 @@ is
     PROCEDURE insert_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB);
     PROCEDURE update_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB);
     PROCEDURE delete_priv_key(i_host VARCHAR2, i_user VARCHAR2);
+--
+------- end fine grained access control key storage ---------------------------
+--
+
+  procedure login_pk( i_user varchar2, i_path varchar2, i_file varchar2, i_password varchar2 := null, i_log_level pls_integer := null );
+  
+  /* experimental, don't expect to much from this procedure */
+  procedure login_wallet( i_wallet_path varchar2, i_user varchar2, i_wallet_password varchar2 := null, i_wallet_file varchar2 := null, i_log_level pls_integer := null );
 
   function pwd
   return varchar2;
