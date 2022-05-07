@@ -6,7 +6,9 @@ A plsql SFTP client package
 
 Anton Scheffer created and maintains the package *as_sftp*. 
 
-This fork adds key management. 
+This fork adds key management. It also optionally implements *Fine Grained Access Control* on the known hosts and
+private keys tables. If you want to know more about why you might want that and how I came about implementing it,
+see [this blog post](https://lee-lindley.github.io/oracle/sql/plsql/2022/01/22/Hiding-Data-Oracle.html).
 
 # Content
 
@@ -48,7 +50,7 @@ END;
 
 ### Trust Connection First Time
 
-Alternatively to providing the *fingerprint* directly, you can trust the connection.
+As an alternative to providing the *fingerprint* directly, you can trust the connection.
 
 ```sql
 BEGIN
@@ -65,7 +67,9 @@ declare
   l_dir_listing as_sftp.tp_dir_listing;
 begin
   as_sftp.open_connection( i_host => 'localhost' );
+-- providing password directly 
   as_sftp.login( i_user => 'demo', i_password => 'demo' );
+-- connection now established. Look around
   as_sftp.set_log_level( 0 );
   dbms_output.put_line( as_sftp.pwd );
   l_dir_listing := as_sftp.read_dir( i_path => '.' );
@@ -73,25 +77,31 @@ begin
   loop
     dbms_output.put_line( l_dir_listing( i ).file_name );
   end loop;
+-- create a blob for test purposes
+--
   l_file := utl_raw.cast_to_raw( 'just a small test file for testing purposes.
 It contains multiple lines.
 This is the third.' );
-  /* create a file in the current directory */
+--
+-- transfer blob as file into current directory on remote host
   as_sftp.put_file( i_path => 'small_file.txt', i_file => l_file );
-  /* create a file in a existing subdirectory of current directory */
+-- create a file in a existing subdirectory of current directory. Assumes directory exists
 --  as_sftp.put_file( i_path => 'src/small_file.txt', i_file => l_file );
+-- replace blob content to prove return transfer worked
   l_file := utl_raw.cast_to_raw( 'dummy' );
-  /* read the just created file */
+--  read the just created file 
   as_sftp.get_file( i_path => 'small_file.txt', i_file => l_file );
   dbms_output.put_line( utl_raw.cast_to_varchar2( l_file ) );
+-- clean up (happens automatically when session ends, but this is good practice)
   dbms_lob.freetemporary( l_file );
+-- end the session
   as_sftp.close_connection;
 end;
 ```
 
 ## Example Usage with Private Key
 
-If you have installed private keys (See [Manage Private Keys](#manage-private-keys),
+If you have installed private key management (See [Manage Private Keys](#manage-private-keys),
 then you can avoid putting the password in your code. 
 
 ```sql
@@ -111,17 +121,23 @@ Using private keys combines the *open_connection* method into *login*.
 declare
   l_file blob;
 begin
-  -- login overloaded with i_host to establish connection and use private key for login
+-- login overloaded with i_host to establish connection and use private key for login
   as_sftp.login( i_user => 'demo', i_host => 'localhost' );
   as_sftp.set_log_level( 0 );
   dbms_output.put_line( as_sftp.pwd );
+-- create blob from text
   l_file := utl_raw.cast_to_raw( 'just a small test file for testing purposes.
 It contains multiple lines.
 This is the third.' );
-  /* create a file in the current directory */
+--
+-- transfer blob as file into current directory on remote host
   as_sftp.put_file( i_path => 'small_file.txt', i_file => l_file );
+-- replace blob content to prove return transfer worked
+  l_file := utl_raw.cast_to_raw( 'dummy' );
+--  read the just created file 
   as_sftp.get_file( i_path => 'small_file.txt', i_file => l_file );
   dbms_output.put_line( utl_raw.cast_to_varchar2( l_file ) );
+-- clean up and close connection
   dbms_lob.freetemporary( l_file );
   as_sftp.close_connection;
 end;
@@ -247,6 +263,11 @@ procedure put_file( i_path varchar2, i_directory varchar2, i_filename varchar2 )
 
 If you have not included *Fine Grained Access Control* on the installation, you may perform DML 
 on table *as_sftp_private_keys* directly. Otherwise, all key access is through package methods.
+(You can use the methods even if you have not added *DBMS_RLS* policy.)
+
+| Hiding Private Key Data Use Case |
+|:--:|
+| ![Hiding Data Use Case](images/hiding_data_use_case.gif) |
 
 From a database login that needs to perform *as_sftp.login*, execute these procedures 
 from package *as_sftp* to manage keys:
@@ -267,7 +288,7 @@ schema. See [Deployment Diagram](images/deployment_diagram.gif).
     PROCEDURE delete_priv_key(i_host VARCHAR2, i_user VARCHAR2);
 ```
 
-For the optional *as_sftp_shared_login*, use package *as_sftp_shared* to configure keys.
+For the optional *as_sftp_shared_login* facility, use package *as_sftp_shared* to configure keys.
 Note that execute on *as_sftp_shared* is not normally granted to other schemas.
 Only the standalone procedure *as_sftp_shared_login* is granted to using schemas.
 
@@ -340,6 +361,13 @@ It seems relatively common to grant *EXECUTE* on DBMS_RLS to Public.
 For *Fine Grained Access Control* you will need either the privilege to create *Public Synonym* 
 or the DBA will need to create one for you. This is commented upon in *src/install_keymgmt_security.sql*.
 
+If you do not enable *Fine Grained Access Control* everything will still work fine; however, users will be able
+to see and manipulate the content of tables *as_sftp_private_keys* and *as_sftp_known_hosts* depending on
+their normal database access privileges. When you are trying
+to debug a problem, that is not such a bad thing. You can turn it off and re-enable it with the anonymous block code 
+that drops and adds policy
+in *uninstall_keymgmt_security.sql* and *install_keymgmt_security.sql*, respectively.
+
 # Installation
 
 See [Requirements](#requirements) before attempting to install.
@@ -390,12 +418,13 @@ It will not clobber existing tables. It then creates or replaces package *as_sft
 If on Oracle version 12 or higher, it checks to see if the installation schema has
 execute privilege on package *DBMS_RLS* (see [Requirements](#requirements)). If so, it will call *install_keymgmt_security.sql*
 to install package *as_sftp_keymgmt_security*, create a public synonym for same, and add *DBMS_RLS* policy
-for table *as_sftp_private_keys*. If you do not have the privilege to create public synonym, comment that out
+for tables *as_sftp_private_keys* and *as_sftp_known_hosts*. 
+If you do not have the privilege to create public synonym, comment that out
 and have the DBA perform that step manually.
 
 ## install_as_sftp_shared.sql
 
-If desired, execute *insall_as_sftp_shared.sql* in the same or one or more additional schemas. Need
+If desired, execute *install_as_sftp_shared.sql* in the same or one or more additional schemas. Need
 for this package is less common.
 
 ## Configure Keys
