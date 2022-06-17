@@ -1981,9 +1981,10 @@ is
         l_dss_len := utl_raw.length( l_tmp ) / 2;
         l_dss_r := utl_raw.substr( l_tmp, 1, l_dss_len );
         l_dss_s := utl_raw.substr( l_tmp, l_dss_len + 1 );
-		if (  ltrim( rawtohex( l_dss_r ) '0' ) is null
-		   or ltrim( rawtohex( l_dss_s ) '0' ) is null
+		if (  ltrim( rawtohex( l_dss_r ), '0' ) is null
+		   or ltrim( rawtohex( l_dss_s ), '0' ) is null
 		   )
+		then
           raise_application_error( -20013, 'ssh-dss not OK' );
         end if;
         l_w := powmod( l_dss_s, demag( nsub( mag( l_q ), 2 ) ), l_q );
@@ -2077,9 +2078,10 @@ is
         l_idx := 1;
         get_mpint( l_idx, l_tmp, l_ecdsa_r );
         get_mpint( l_idx, l_tmp, l_ecdsa_s );
-		if (  ltrim( rawtohex( l_ecdsa_r ) '0' ) is null
-		   or ltrim( rawtohex( l_ecdsa_s ) '0' ) is null
+		if (  ltrim( rawtohex( l_ecdsa_r ), '0' ) is null
+		   or ltrim( rawtohex( l_ecdsa_s ), '0' ) is null
 		   )
+		then
           raise_application_error( -20022, 'ECDSA not OK' );
         end if;
         l_inv := powmod( mag( l_ecdsa_s ), nsub( l_curve.group_order, 2 ), l_curve.group_order );
