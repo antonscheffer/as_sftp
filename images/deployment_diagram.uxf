@@ -1,0 +1,297 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<diagram program="umlet" version="14.3.0">
+  <zoom_level>13</zoom_level>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>169</x>
+      <y>273</y>
+      <w>182</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>symbol=component
+
+as_sftp
+bg=orange
+layer=1</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>689</x>
+      <y>559</y>
+      <w>182</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>symbol=component
+
+as_sftp_shared_login
+layer=1
+bg=orange</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>39</x>
+      <y>234</y>
+      <w>429</w>
+      <h>455</h>
+    </coordinates>
+    <panel_attributes>Deployment Schema
+halign=left
+bg=light_gray</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>676</x>
+      <y>390</y>
+      <w>260</w>
+      <h>286</h>
+    </coordinates>
+    <panel_attributes>Shared Key Schema
+(may be Deployment Schema)
+halign=left
+bg=light_gray</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>52</x>
+      <y>572</y>
+      <w>195</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>&lt;&lt;table&gt;&gt;
+as_sftp_known_hosts
+bg=yellow
+layer=1</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>260</x>
+      <y>572</y>
+      <w>195</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>&lt;&lt;table&gt;&gt;
+as_sftp_private_keys
+bg=yellow
+layer=1</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>338</x>
+      <y>338</y>
+      <w>377</w>
+      <h>299</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-
+Shared User Key</panel_attributes>
+    <additional_attributes>10.0;10.0;120.0;10.0;120.0;210.0;270.0;210.0</additional_attributes>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>247</x>
+      <y>507</y>
+      <w>130</w>
+      <h>91</h>
+    </coordinates>
+    <panel_attributes/>
+    <additional_attributes>10.0;10.0;80.0;50.0</additional_attributes>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>143</x>
+      <y>507</y>
+      <w>143</w>
+      <h>91</h>
+    </coordinates>
+    <panel_attributes/>
+    <additional_attributes>90.0;10.0;10.0;50.0</additional_attributes>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>676</x>
+      <y>182</y>
+      <w>260</w>
+      <h>169</h>
+    </coordinates>
+    <panel_attributes>Application Schema
+halign=left
+bg=light_gray</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>689</x>
+      <y>221</y>
+      <w>195</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>symbol=component
+
+Program Unit
+(package or procedure)
+bg=orange
+layer=1</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>1053</x>
+      <y>52</y>
+      <w>260</w>
+      <h>195</h>
+    </coordinates>
+    <panel_attributes>Login Schema
+halign=left
+bg=light_gray</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>1066</x>
+      <y>91</y>
+      <w>195</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>symbol=component
+
+Anonymous Block
+bg=orange
+layer=1</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>871</x>
+      <y>130</y>
+      <w>221</w>
+      <h>143</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-</panel_attributes>
+    <additional_attributes>10.0;90.0;150.0;10.0</additional_attributes>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>156</x>
+      <y>416</y>
+      <w>221</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>symbol=component
+
+as_sftp_keymgmt_security
+bg=orange
+layer=1</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>247</x>
+      <y>364</y>
+      <w>39</w>
+      <h>78</h>
+    </coordinates>
+    <panel_attributes/>
+    <additional_attributes>10.0;10.0;10.0;40.0</additional_attributes>
+  </element>
+  <element>
+    <id>UMLGeneric</id>
+    <coordinates>
+      <x>689</x>
+      <y>442</y>
+      <w>182</w>
+      <h>104</h>
+    </coordinates>
+    <panel_attributes>symbol=component
+
+as_sftp_shared
+(Key Management)
+layer=1
+bg=orange</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>260</x>
+      <y>104</y>
+      <w>832</w>
+      <h>195</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-
+Calling User
+(Login Schema)
+Key</panel_attributes>
+    <additional_attributes>10.0;130.0;10.0;10.0;620.0;10.0</additional_attributes>
+  </element>
+  <element>
+    <id>UMLDeployment</id>
+    <coordinates>
+      <x>13</x>
+      <y>0</y>
+      <w>1352</w>
+      <h>728</h>
+    </coordinates>
+    <panel_attributes>&lt;&lt;execution environment&gt;&gt;
+Oracle Database</panel_attributes>
+    <additional_attributes/>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>858</x>
+      <y>130</y>
+      <w>234</w>
+      <h>494</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-</panel_attributes>
+    <additional_attributes>10.0;360.0;160.0;10.0</additional_attributes>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>858</x>
+      <y>260</y>
+      <w>286</w>
+      <h>390</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-
+May Use
+Shared User Key
+If Granted</panel_attributes>
+    <additional_attributes>10.0;280.0;90.0;280.0;90.0;10.0;20.0;10.0</additional_attributes>
+  </element>
+  <element>
+    <id>Relation</id>
+    <coordinates>
+      <x>338</x>
+      <y>260</y>
+      <w>377</w>
+      <h>91</h>
+    </coordinates>
+    <panel_attributes>lt=&lt;-
+Application Schema
+Key</panel_attributes>
+    <additional_attributes>10.0;50.0;120.0;50.0;120.0;10.0;270.0;10.0</additional_attributes>
+  </element>
+</diagram>
