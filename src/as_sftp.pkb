@@ -3669,8 +3669,13 @@ is
           l_idx := 1;
           get_int32( l_idx, p_buf, l_len );
           -- skip length attribute
-          p_buf := utl_raw.substr( p_buf, 5 );
-          while utl_raw.length( p_buf ) < l_len
+          if utl_raw.length( p_buf ) > 4
+          then
+            p_buf := utl_raw.substr( p_buf, 5 );
+          else
+            p_buf := null;
+          end if;
+          while coalesce( utl_raw.length( p_buf ), 0 ) < l_len
           loop
             read_fxp_message( l_buf, false );
             p_buf := utl_raw.concat( p_buf, l_buf );
