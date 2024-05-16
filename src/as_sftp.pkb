@@ -255,6 +255,45 @@ is
     log( p_msg );
   end;
   --
+  -- the caller may be a session_user from an anonymous block or may be another program unit granted
+  -- to the user. We obtain the owner of that program unit or else the session user. This is the
+  -- individual for whom we manage known_hosts and private keys
+  --
+  FUNCTION get_caller_current_user
+  RETURN VARCHAR2
+  IS
+        v_caller    VARCHAR2(128);
+        v_depth     BINARY_INTEGER := UTL_CALL_STACK.dynamic_depth;
+  BEGIN
+$if dbms_db_version.ver_le_10 $then
+    v_caller := '&&compile_schema.';
+$elsif dbms_db_version.ver_le_11 $then
+    -- utl_call_stack only became available in oracle 12.  If you are on older version, stick with
+    -- a single list of private keys, not by calling user.
+    -- Could parse format_call_stack like we used to do, but not worth the effort to support releases prior to 12
+    v_caller := '&&compile_schema.';
+$else
+        -- We skip the first entry which is this procedure
+        -- we must be called by another method in this package because we are private, 
+        -- so we skip the second entry which is the caller in this package.
+        -- Starting with the 3rd entry we look for a caller that is not in this package.
+        -- That entry is either another package or procedure, or else an anonymous block. If it is
+        -- a compiled object, we use the owner of that object; otherwise, we use the USER.
+        --
+        -- If v_depth < 3 we deserve to blow up
+        v_depth := UTL_CALL_STACK.dynamic_depth;
+        FOR i IN 3..v_depth
+        LOOP
+            CONTINUE WHEN UTL_CALL_STACK.owner(i) = '&&compile_schema.' 
+                AND UTL_CALL_STACK.concatenate_subprogram(UTL_CALL_STACK.subprogram(i)) LIKE 'AS_SFTP.%' ;
+            -- an anonymous block has no owner, so get the session user which is not changed by priv call stack
+            v_caller := NVL( UTL_CALL_STACK.owner(i), SYS_CONTEXT('USERENV','SESSION_USER') );
+            EXIT;
+        END LOOP;
+$end
+        RETURN v_caller;
+  END get_caller_current_user ;
+  --
   function mag( p1 varchar2 )
   return tp_mag
   is
@@ -1892,11 +1931,13 @@ is
     l_K raw(32767);
     l_H raw(100);
     --
-    cursor c_known_hosts( cp_host varchar2 )
+    cursor c_known_hosts( cp_host varchar2, cp_current_user varchar2 )
     is
     select fingerprint
     from as_sftp_known_hosts
-    where host = cp_host;
+    where host = cp_host AND current_user = cp_current_user
+    ;
+
     r_known_hosts c_known_hosts%rowtype;
     --
     function derive_key( p_byte raw, p_len pls_integer )
@@ -2479,33 +2520,54 @@ is
     end if;
     info_msg( 'host fingerprint: ' || l_host_fingerprint );
     --
-    if    l_host_fingerprint = lower( p_fingerprint )
+    declare
+      l_current_user VARCHAR2(128) := get_caller_current_user;
+    begin
+      if    l_host_fingerprint = lower( p_fingerprint )
        or l_host_fingerprint = 'MD5:' || lower( p_fingerprint )
        or l_host_fingerprint = 'SHA256:' || p_fingerprint
        or p_trust
-    then
-      merge into as_sftp_known_hosts
-      using ( select upper( g_con.remote_host ) p_host from dual ) on ( host = p_host )
-      when matched then
-        update set fingerprint = l_host_fingerprint
-      when not matched then
-        insert( host, fingerprint ) values( p_host, l_host_fingerprint );
-      commit;
-    else
-      open c_known_hosts( upper( g_con.remote_host ) );
-      fetch c_known_hosts into r_known_hosts;
-      if c_known_hosts%notfound
       then
-        r_known_hosts.fingerprint := null;
-      end if;
-      close c_known_hosts;
-      if l_host_fingerprint = r_known_hosts.fingerprint
-      then
-        null; -- OK
+        -- oracle fine grained access control does not support merge. Use update/insert
+        /*
+        merge into as_sftp_known_hosts
+        using ( select upper( g_con.remote_host ) AS p_host, l_current_user AS p_current_user
+                from dual 
+        ) 
+        on ( host = p_host and current_user = p_current_user )
+        when matched then
+          update set fingerprint = l_host_fingerprint
+        when not matched then
+          insert( host, fingerprint, current_user ) values( p_host, l_host_fingerprint, p_current_user );
+        */
+
+        UPDATE as_sftp_known_hosts
+        SET fingerprint = l_host_fingerprint
+        WHERE host = UPPER(g_con.remote_host) AND current_user = l_current_user ;
+        IF SQL%ROWCOUNT = 0 THEN
+          INSERT INTO as_sftp_known_hosts( 
+            host, fingerprint, current_user 
+          ) values ( 
+            UPPER(g_con.remote_host), l_host_fingerprint, l_current_user
+          );
+        END IF;
+        commit;
       else
-        raise_application_error( -20017, 'Host fingerprint not OK.' );
+        open c_known_hosts( upper( g_con.remote_host ), l_current_user);
+        fetch c_known_hosts into r_known_hosts;
+        if c_known_hosts%notfound
+        then
+          r_known_hosts.fingerprint := null;
+        end if;
+        close c_known_hosts;
+        if l_host_fingerprint = r_known_hosts.fingerprint
+        then
+          null; -- OK
+        else
+          raise_application_error( -20017, 'Host fingerprint not OK.' );
+        end if;
       end if;
-    end if;
+    end; -- block with l_current_user
     --
     write_packet( SSH_MSG_NEWKEYS );
     read_until( l_buf, SSH_MSG_NEWKEYS );
@@ -4443,6 +4505,85 @@ is
       g_log_level := l_prev_log_level;
       raise;
   end;
+
+    --
+    -- This is the only method to select the private key when fine grained access control is added to the table
+    -- with as_sftp_keymgt_security package. It is a package private function only called by login()
+    --
+    FUNCTION get_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_current_user VARCHAR2) 
+    RETURN CLOB
+    IS
+        v_clob CLOB;
+    BEGIN
+        SELECT key INTO v_clob
+        FROM as_sftp_private_keys k
+        WHERE host = UPPER(i_host) AND k.id = UPPER(i_user) AND k.current_user = i_current_user
+        ;
+        RETURN v_clob;
+    EXCEPTION
+        WHEN NO_DATA_FOUND THEN
+            raise_application_error(-20713, 'no record found in table as_sftp_private_keys for host='||i_host||', id='||i_user);
+    END ;
+
+    --
+    -- The method for obtaining the private key and using it to call as_sftp.login
+    --
+    PROCEDURE login(
+         i_user         VARCHAR2
+        ,i_host         VARCHAR2
+        ,i_trust_server BOOLEAN := FALSE
+        ,i_passphrase   VARCHAR2 := NULL
+        ,i_log_level    pls_integer := null
+    )
+    IS
+        l_current_user  VARCHAR2(32767) := get_caller_current_user;
+        v_priv_key      VARCHAR2(32767) := get_priv_key(i_host, i_user, l_current_user);
+    BEGIN
+        IF i_trust_server THEN
+            as_sftp.open_connection(i_host => i_host, i_trust_server => TRUE);
+            -- not sure required to close and reopen, but that is how Anton's example works
+            as_sftp.close_connection;
+        END IF;
+        as_sftp.open_connection(i_host => i_host);
+        as_sftp.login(i_log_level => i_log_level, i_user => i_user, i_priv_key => v_priv_key, i_passphrase => i_passphrase);
+    END;
+
+    --
+    -- 3 DML methods for manipulating the key table records
+    --
+    PROCEDURE insert_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB) 
+    IS
+        l_current_user  VARCHAR2(32767) := get_caller_current_user;
+    BEGIN
+        INSERT INTO as_sftp_private_keys(
+                host, id, current_user, key
+        ) VALUES(
+                UPPER(i_host), UPPER(i_user), l_current_user, i_key
+        );
+        COMMIT;
+    END insert_priv_key;
+
+    PROCEDURE update_priv_key(i_host VARCHAR2, i_user VARCHAR2, i_key CLOB) 
+    IS
+        l_current_user  VARCHAR2(32767) := get_caller_current_user;
+    BEGIN
+        UPDATE as_sftp_private_keys
+            SET key = i_key
+            WHERE host = UPPER(i_host) AND id = UPPER(i_user) AND current_user = l_current_user
+            ;
+        COMMIT;
+    END update_priv_key;
+
+    PROCEDURE delete_priv_key(i_host VARCHAR2, i_user VARCHAR2) 
+    IS
+        l_current_user  VARCHAR2(32767) := get_caller_current_user;
+    BEGIN
+        DELETE FROM as_sftp_private_keys
+            WHERE host = UPPER(i_host) AND id = UPPER(i_user) AND current_user = l_current_user
+            ;
+        COMMIT;
+    END delete_priv_key;
+
   --
   procedure open_connection
     ( p_host varchar2
@@ -5459,3 +5600,5 @@ raise;
       raise_application_error( -20043, 'Can not read private key ' || i_file );
   end;
 end;
+/
+show errors
