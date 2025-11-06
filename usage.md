@@ -48,4 +48,5 @@ end;</code></pre>
 
 
 # Login using a private key is partly supported, i.e. only using a RSA and DSA/DSS private key.
-As soon as I think that this package is used (lots of stars, lots of bug issues, lots of feature requests, lots of donations) I will extend that with ECDSA private keys.
+This package has limited support support for ECDSA private keys. It is working, but only when you have a key in the right format with the right curve parameters.
+Due to the lack of any feedback, positive or negative, I doubt that this package is used that much. At least not worth the time to put any effort in extending this package.  
