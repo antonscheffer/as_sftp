@@ -1,4 +1,4 @@
-CREATE OR REPLACE package body as_sftp
+create or replace package body as_sftp
 is
   --
   type tp_mag is table of number index by pls_integer;
@@ -60,6 +60,7 @@ is
   g_mac_algo_s   varchar2(100 char);
   g_compr_algo_c varchar2(100 char);
   g_compr_algo_s varchar2(100 char);
+  g_charset      varchar2(100 char) := 'AL32UTF8';
   type tp_my_globals is record
          ( excluded_kex_algos   varchar2(32767)
          , preferred_kex_algos  varchar2(32767)
@@ -98,7 +99,7 @@ is
   g_iv_cypher_s2c_ctr number;
   --
   -- kex globals
-  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.088', 'US7ASCII' );
+  V_C raw(512) := utl_i18n.string_to_raw( 'SSH-2.0-as_sftp_0.089', 'US7ASCII' );
   V_S raw(512);
   g_session_id raw(100);
   --
@@ -1095,11 +1096,10 @@ is
                     , p_curve.b
                     , p_curve.prime
                     );
-      if l_first = '02'
+      p_point.y := powmod( l_y2, p_curve.p_plus_1_div_4, p_curve.prime );
+      if to_number( l_first ) - 2 != mod( p_point.y( 0 ), 2 )
       then
-        p_point.y := powmod( l_y2, p_curve.p_plus_1_div_4, p_curve.prime );
-      else
-        p_point.y := rsub( p_curve.prime, powmod( l_y2, p_curve.p_plus_1_div_4, p_curve.prime ) );
+        p_point.y := rsub( p_curve.prime, p_point.y );
       end if;
       -- raise_application_error( -20023, 'EC Point compression not supported.' );
     end if;
@@ -1981,10 +1981,10 @@ is
         l_dss_len := utl_raw.length( l_tmp ) / 2;
         l_dss_r := utl_raw.substr( l_tmp, 1, l_dss_len );
         l_dss_s := utl_raw.substr( l_tmp, l_dss_len + 1 );
-		if (  ltrim( rawtohex( l_dss_r ), '0' ) is null
-		   or ltrim( rawtohex( l_dss_s ), '0' ) is null
-		   )
-		then
+        if (  ltrim( rawtohex( l_dss_r ), '0' ) is null
+           or ltrim( rawtohex( l_dss_s ), '0' ) is null
+           )
+        then
           raise_application_error( -20013, 'ssh-dss not OK' );
         end if;
         l_w := powmod( l_dss_s, demag( nsub( mag( l_q ), 2 ) ), l_q );
@@ -2078,10 +2078,10 @@ is
         l_idx := 1;
         get_mpint( l_idx, l_tmp, l_ecdsa_r );
         get_mpint( l_idx, l_tmp, l_ecdsa_s );
-		if (  ltrim( rawtohex( l_ecdsa_r ), '0' ) is null
-		   or ltrim( rawtohex( l_ecdsa_s ), '0' ) is null
-		   )
-		then
+        if (  ltrim( rawtohex( l_ecdsa_r ), '0' ) is null
+           or ltrim( rawtohex( l_ecdsa_s ), '0' ) is null
+           )
+        then
           raise_application_error( -20022, 'ECDSA not OK' );
         end if;
         l_inv := powmod( mag( l_ecdsa_s ), nsub( l_curve.group_order, 2 ), l_curve.group_order );
@@ -3768,7 +3768,7 @@ is
   begin
     l_fxp_id := 240;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( p_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( p_path, g_charset ) );
     write_fxp_message( SSH_FXP_REALPATH, l_buf );
     loop
       read_fxp_message( l_buf );
@@ -3821,7 +3821,7 @@ is
     l_buf := null;
     l_fxp_id := 245;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, g_charset ) );
     append_int32( l_buf, SSH_FXF_READ );
     append_int32( l_buf, 0 );
     write_fxp_message( SSH_FXP_OPEN, l_buf );
@@ -3953,7 +3953,7 @@ is
     l_buf := null;
     l_fxp_id := 245;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, g_charset ) );
     append_int32( l_buf, SSH_FXF_WRITE + SSH_FXF_CREAT + SSH_FXF_TRUNC );
     append_int32( l_buf, 0 );
     write_fxp_message( SSH_FXP_OPEN, l_buf );
@@ -4077,7 +4077,7 @@ is
     l_buf := null;
     l_fxp_id := 254;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, g_charset ) );
     write_fxp_message( SSH_FXP_OPENDIR, l_buf );
     loop
       read_fxp_message( l_buf );
@@ -4116,9 +4116,9 @@ is
           loop
             l_dir_line := null;
             get_string( l_idx, l_buf, l_buf2 );
-            l_dir_line.file_name := utl_raw.cast_to_varchar2( l_buf2 );
+            l_dir_line.file_name := utl_i18n.raw_to_char( l_buf2, g_charset );
             get_string( l_idx, l_buf, l_buf2 );
-            l_dir_line.long_name := utl_raw.cast_to_varchar2( l_buf2 );
+            l_dir_line.long_name := utl_i18n.raw_to_char( l_buf2, g_charset );
             get_int32( l_idx, l_buf, l_flags );
             if bitand( l_flags, SSH_FILEXFER_ATTR_SIZE ) = SSH_FILEXFER_ATTR_SIZE
             then
@@ -4188,7 +4188,7 @@ is
     l_buf := null;
     l_fxp_id := 241;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, g_charset ) );
     append_int32( l_buf, 0 );
     write_fxp_message( SSH_FXP_LSTAT, l_buf );
     loop
@@ -4264,7 +4264,7 @@ is
     l_buf := null;
     l_fxp_id := 244;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_filename, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_filename, g_charset ) );
     write_fxp_message( SSH_FXP_REMOVE, l_buf );
     loop
       read_fxp_message( l_buf );
@@ -4301,7 +4301,7 @@ is
     l_buf := null;
     l_fxp_id := 246;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, g_charset ) );
     write_fxp_message( SSH_FXP_RMDIR, l_buf );
     loop
       read_fxp_message( l_buf );
@@ -4338,7 +4338,7 @@ is
     l_buf := null;
     l_fxp_id := 238;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_path, g_charset ) );
     append_int32( l_buf, 0 );
     write_fxp_message( SSH_FXP_MKDIR, l_buf );
     loop
@@ -4376,8 +4376,8 @@ is
     l_buf := null;
     l_fxp_id := 248;
     append_int32( l_buf, l_fxp_id );
-    append_string( l_buf, utl_i18n.string_to_raw( i_old_path, 'AL32UTF8' ) );
-    append_string( l_buf, utl_i18n.string_to_raw( i_new_path, 'AL32UTF8' ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_old_path, g_charset ) );
+    append_string( l_buf, utl_i18n.string_to_raw( i_new_path, g_charset ) );
     write_fxp_message( SSH_FXP_RENAME, l_buf );
     loop
       read_fxp_message( l_buf );
@@ -5451,11 +5451,23 @@ raise;
     dbms_lob.fileopen( l_bfile );
     l_private_key := dbms_lob.substr( l_bfile, 32767, 1 );
     dbms_lob.fileclose( l_bfile );
-    login( i_user => i_user, i_priv_key => l_private_key, i_passphrase => i_password, i_log_level => i_log_level );
+    login( i_user => i_user, i_priv_key => utl_raw.cast_to_varchar2( l_private_key ), i_passphrase => i_password, i_log_level => i_log_level );
   exception
     when dbms_lob.NOEXIST_DIRECTORY then
       raise_application_error( -20042, 'Directory (object) for private key does not exist: ' || i_path );
     when dbms_lob.OPERATION_FAILED then
       raise_application_error( -20043, 'Can not read private key ' || i_file );
   end;
+  --
+  procedure set_server_charset( i_charset varchar2 := null, i_utf8 boolean := null )
+  is
+  begin
+    g_charset := coalesce( case when i_utf8 then 'AL32UTF8' end
+                         , nls_charset_name( nls_charset_id( i_charset ) )
+                         , utl_i18n.map_charset( i_charset, utl_i18n.GENERIC_CONTEXT, utl_i18n.IANA_TO_ORACLE )
+                         , 'AL32UTF8'
+                         );
+  end set_server_charset;
+  --
 end;
+/
